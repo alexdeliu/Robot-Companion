@@ -3,7 +3,7 @@ import json
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
-from abilities.weather import get_weather
+from brain.abilities.weather import get_weather
 
 load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY")

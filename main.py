@@ -53,7 +53,7 @@ class RobotCompanionUI:
 
         # 5. NOU: Buton Microfon (la mijloc)
         self.btn_mic = tk.Button(
-            self.root, text="🎙️", font=("Arial", 16),
+            self.root, text="MIC", font=("Arial", 16),
             bg="#C678DD", fg="white", command=self.declanseaza_ascultare, relief="flat"
         )
         self.btn_mic.place(relx=0.22, rely=0.86, relwidth=0.15, relheight=0.12)
@@ -73,7 +73,7 @@ class RobotCompanionUI:
     # --- NOU: LOGICA DE ASCULTARE VOCALĂ ---
     def declanseaza_ascultare(self):
         # Schimbăm aspectul butoanelor pentru a semnaliza că înregistrează
-        self.btn_mic.config(bg="#E5C07B", text="⏳")
+        self.btn_mic.config(bg="#E5C07B", text="...")
         self.btn_send.config(state=tk.DISABLED)
         self.btn_kb.config(state=tk.DISABLED)
         
@@ -89,7 +89,7 @@ class RobotCompanionUI:
 
     def finalizare_ascultare(self, text):
         # Resetăm butoanele la normal
-        self.btn_mic.config(bg="#C678DD", text="🎙️")
+        self.btn_mic.config(bg="#C678DD", text="MIC")
         self.btn_send.config(state=tk.NORMAL)
         self.btn_kb.config(state=tk.NORMAL)
         

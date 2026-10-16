@@ -88,10 +88,11 @@ class RobotCompanionUI:
     def fir_salut_initial(self):
         try:
             raspuns = genereaza_salut_pornire(limba="ro")
-            text_salut = raspuns.get("mesaj", "Salut! Sunt gata de treabă!")
-            self.root.after(0, lambda: self.afiseaza_mesaj("Robot [SALUT]", text_salut))
+            text_ecran = raspuns.get("mesaj", "Salut! Sunt gata de treabă!")
+            text_voce = raspuns.get("mesaj_audio") or text_ecran
+            self.root.after(0, lambda: self.afiseaza_mesaj("Robot [SALUT]", text_ecran))
             self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
-            vorbeste(text_salut, limba="ro")
+            vorbeste(text_voce, limba="ro")
         except Exception as e:
             print(f"[EROARE SALUT]: {e}")
         finally:
@@ -231,12 +232,13 @@ class RobotCompanionUI:
         try:
             raspuns = proceseaza_comanda_ai(mesaj, limba="ro")
             text_final = raspuns.get("mesaj", "Eroare: Răspuns invalid.")
+            text_voce = raspuns.get("mesaj_audio") or text_final
             actiune = raspuns.get("actiune", "info")
             
             self.root.after(0, lambda: self.afiseaza_mesaj(f"Robot [{actiune.upper()}]", text_final))
             self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
             
-            vorbeste(text_final, limba="ro")
+            vorbeste(text_voce, limba="ro")
             
         except Exception as e:
             self.root.after(0, lambda: self.afiseaza_mesaj("Eroare Sistem", f"Eroare: {e}"))

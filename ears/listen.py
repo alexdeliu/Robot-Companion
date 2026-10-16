@@ -4,7 +4,6 @@ from array import array
 from contextlib import contextmanager
 import speech_recognition as sr
 
-# Variabilă globală pentru Zero-Latency Caching (evită rescanarea USB la fiecare apăsare)
 _MIC_INDEX_CACHE = None
 
 @contextmanager
@@ -24,12 +23,12 @@ def ignore_stderr():
     except Exception:
         yield
 
-# Configurare globală a recognizer-ului
 recognizer = sr.Recognizer()
 recognizer.dynamic_energy_threshold = False
-recognizer.energy_threshold = 240
-recognizer.non_speaking_duration = 0.4
-recognizer.pause_threshold = 1.0
+recognizer.energy_threshold = 230
+# Timp de așteptare după ce termini de vorbit redus la 0.65s pentru reacție rapidă!
+recognizer. non_speaking_duration = 0.35
+recognizer.pause_threshold = 0.65
 
 def _obtine_index_microfon():
     """Caută portul USB al camerei web o singură dată și îl salvează în cache."""
@@ -49,13 +48,10 @@ def _obtine_index_microfon():
 
     return _MIC_INDEX_CACHE
 
-def _proceseaza_dsp_audio(audio_data):
+def _proceseaza_dsp_rapid(audio_data):
     """
-    Prelucrează semnalul brut de la microfonul de 8000 Hz:
-    1. Elimină DC Offset-ul
-    2. Aplică filtru Pre-Emphasis (accentuează consoanele s, ș, t, ț, c)
-    3. Aplică Auto-Gain (amplifică vocea dacă vorbești de la distanță)
-    4. Face Upsampling 8000 Hz -> 16000 Hz pentru Google STT
+    Filtru DSP ultra-rapid (o singură trecere, fără upsampling inutil) optimizat pentru Raspberry Pi 3B+:
+    Curăță DC offset-ul, accentuează consoanele (Pre-Emphasis) și amplifică vocea (Auto-Gain).
     """
     try:
         raw_bytes = audio_data.get_raw_data(convert_rate=8000, convert_width=2)
@@ -64,44 +60,22 @@ def _proceseaza_dsp_audio(audio_data):
         if num_samples == 0:
             return audio_data
 
-        # 1. Eliminare DC Offset
         dc_offset = int(sum(samples) / num_samples)
-        if dc_offset != 0:
-            for i in range(num_samples):
-                val = samples[i] - dc_offset
-                samples[i] = max(-32768, min(32767, val))
+        max_peak = max(abs(x - dc_offset) for x in samples)
+        gain = min(5.5, 27000.0 / float(max_peak)) if max_peak > 450 else 1.0
 
-        # 2. Filtru de claritate pentru consoane
-        clarified = array('h', [0] * num_samples)
-        prev = samples[0]
-        clarified[0] = prev
+        out = array('h', [0] * num_samples)
+        prev = samples[0] - dc_offset
+        out[0] = max(-32768, min(32767, int(prev * gain)))
+
+        # O singură buclă rapidă pentru Pre-Emphasis + Auto-Gain
         for i in range(1, num_samples):
-            curr = samples[i]
-            boosted = int(curr + 0.45 * (curr - prev))
-            clarified[i] = max(-32768, min(32767, boosted))
+            curr = samples[i] - dc_offset
+            boosted = (curr + 0.45 * (curr - prev)) * gain
+            out[i] = max(-32768, min(32767, int(boosted)))
             prev = curr
 
-        # 3. Auto-Gain (Normalizare volum până la 85% din maxim, max 6x amplificare)
-        max_peak = max(abs(x) for x in clarified)
-        if max_peak > 450:
-            target_peak = 28000
-            gain = min(6.0, target_peak / float(max_peak))
-            if gain > 1.05:
-                for i in range(num_samples):
-                    val = int(clarified[i] * gain)
-                    clarified[i] = max(-32768, min(32767, val))
-
-        # 4. Upsampling 8000 Hz -> 16000 Hz
-        upsampled = array('h', [0] * (num_samples * 2))
-        for i in range(num_samples - 1):
-            s1 = clarified[i]
-            s2 = clarified[i + 1]
-            upsampled[2 * i] = s1
-            upsampled[2 * i + 1] = (s1 + s2) >> 1
-        upsampled[-2] = clarified[-1]
-        upsampled[-1] = clarified[-1]
-
-        return sr.AudioData(upsampled.tobytes(), 16000, 2)
+        return sr.AudioData(out.tobytes(), 8000, 2)
 
     except Exception as e:
         print(f"[AVERTISMENT DSP]: {e}")
@@ -109,10 +83,7 @@ def _proceseaza_dsp_audio(audio_data):
 
 def asculta_voce(on_status=None):
     """
-    Ascultă microfonul și trimite în timp real starea către interfață prin callback-ul on_status:
-    - "pregatire": cât timp deschide și calibrează portul USB
-    - "asculta": în secunda exactă în care utilizatorul poate vorbi
-    - "procesare": imediat ce utilizatorul a terminat de vorbit și se face transcrierea
+    Ascultă microfonul cu latență minimă și recunoaște atât Română (ro-RO), cât și Engleză (en-US).
     """
     if on_status:
         on_status("pregatire")
@@ -124,42 +95,48 @@ def asculta_voce(on_status=None):
             source = sr.Microphone(device_index=mic_index, sample_rate=8000, chunk_size=512)
 
         with source:
-            # Micro-calibrare rapidă (0.25s) ca să nu rămână blocat în zgomotul de fond
-            recognizer.adjust_for_ambient_noise(source, duration=0.25)
-            # Limităm pragul în zona sigură (între 200 și 320)
-            recognizer.energy_threshold = max(200, min(320, int(recognizer.energy_threshold * 1.15)))
+            # Calibrare ultra-scurtă (0.15s) doar pentru stabilizarea canalului USB
+            recognizer.adjust_for_ambient_noise(source, duration=0.15)
+            recognizer.energy_threshold = max(190, min(300, int(recognizer.energy_threshold * 1.15)))
 
-            # Anunțăm interfața că microfonul este DESCHIS și gata de vorbire!
             if on_status:
                 on_status("asculta")
             print(f"\n[ROBOT]: Te ascult! (Prag energie: {recognizer.energy_threshold})")
 
-            audio_brut = recognizer.listen(source, timeout=7, phrase_time_limit=8)
+            audio_brut = recognizer.listen(source, timeout=6, phrase_time_limit=8)
 
-        # Cum s-a ieșit din blocul 'with source', microfonul este eliberat!
         if on_status:
             on_status("procesare")
-        print("[SISTEM]: Aplic filtrele audio și trimit la Google STT...")
+        print("[SISTEM]: Procesez și trimit vocea la Google STT...")
 
-        audio_curat = _proceseaza_dsp_audio(audio_brut)
+        audio_curat = _proceseaza_dsp_rapid(audio_brut)
 
-        with open("debug.wav", "wb") as f:
+        # Pe Raspberry Pi salvăm debug.wav în RAM (/dev/shm) ca să nu încetinim cardul SD
+        cale_debug = "/dev/shm/debug.wav" if os.path.isdir("/dev/shm") else "debug.wav"
+        with open(cale_debug, "wb") as f:
             f.write(audio_curat.get_wav_data())
 
-        text = recognizer.recognize_google(audio_curat, language="ro-RO")
-        print(f"[TU AI SPUS]: {text}")
-        return text
+        # 1. Încercăm recunoașterea în limba Română (care prinde și cuvinte englezești uzuale)
+        try:
+            text = recognizer.recognize_google(audio_curat, language="ro-RO")
+            print(f"[TU AI SPUS (RO)]: {text}")
+            return text
+        except sr.UnknownValueError:
+            # 2. Dacă ai vorbit o propoziție întreagă în Engleză, o decodăm instant pe en-US!
+            text_en = recognizer.recognize_google(audio_curat, language="en-US")
+            print(f"[TU AI SPUS (EN)]: {text_en}")
+            return text_en
 
     except sr.WaitTimeoutError:
         print("[EROARE]: Nu s-a detectat voce în timpul alocat.")
         return None
     except sr.UnknownValueError:
-        print("[EROARE]: Nu am înțeles cuvintele. (Verifică debug.wav)")
+        print("[EROARE]: Nu am înțeles cuvintele nici în RO, nici în EN.")
         return None
     except Exception as e:
         print(f"[EROARE MICROFON]: {e}")
         global _MIC_INDEX_CACHE
-        _MIC_INDEX_CACHE = None  # Resetăm cache-ul dacă portul USB a dat eroare
+        _MIC_INDEX_CACHE = None
         return None
 
 if __name__ == "__main__":

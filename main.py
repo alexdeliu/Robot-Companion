@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import scrolledtext
 import threading
-from brain.ai_brain import proceseaza_comanda_ai
+from brain.ai_brain import proceseaza_comanda_ai, genereaza_salut_pornire
 from ears.listen import asculta_voce
 from voice.speak import vorbeste
 
@@ -10,7 +10,6 @@ class RobotCompanionUI:
         self.root = root
         self.root.title("Robot Companion")
         
-        # Flag intern care previne apăsările duble fără să facă butoanele "gri șterse" pe Linux
         self.ocupat = False
 
         # --- SECRETUL PENTRU KIOSK MODE PERFECT ---
@@ -35,9 +34,9 @@ class RobotCompanionUI:
             wrap=tk.WORD, relief="flat", state=tk.DISABLED
         )
         self.text_display.place(relx=0.05, rely=0.12, relwidth=0.9, relheight=0.58)
-        self.afiseaza_mesaj("Sistem", "Sisteme online. Apasă pe MIC pentru a vorbi sau scrie o comandă...")
+        self.afiseaza_mesaj("Sistem", "Sisteme online. Mă trezesc...")
 
-        # 3. Zona pentru input (folosită și ca bară de status vizuală în timpul ascultării!)
+        # 3. Zona pentru input
         self.entry_input = tk.Entry(
             self.root, font=("Arial", 14, "bold"), 
             bg="#282C34", fg="white", insertbackground="white", relief="flat"
@@ -76,28 +75,47 @@ class RobotCompanionUI:
 
         self.entry_input.focus_force()
 
+        # 8. Declanșăm automat mesajul de întâmpinare la 0.5 secunde după afișarea ferestrei!
+        self.root.after(500, self.porneste_salut_initial)
+
+    # --- SALUTUL DINAMIC DE LA PORNIRE ---
+    def porneste_salut_initial(self):
+        self.ocupat = True
+        self.btn_send.config(text="MĂ TREZESC...", bg="#E5C07B", fg="#1E222A")
+        self.btn_mic.config(bg="#4B5263", text="MIC")
+        threading.Thread(target=self.fir_salut_initial, daemon=True).start()
+
+    def fir_salut_initial(self):
+        try:
+            raspuns = genereaza_salut_pornire(limba="ro")
+            text_salut = raspuns.get("mesaj", "Salut! Sunt gata de treabă!")
+            self.root.after(0, lambda: self.afiseaza_mesaj("Robot [SALUT]", text_salut))
+            self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
+            vorbeste(text_salut, limba="ro")
+        except Exception as e:
+            print(f"[EROARE SALUT]: {e}")
+        finally:
+            self.root.after(0, self.reseteaza_butoane_dupa_raspuns)
+
     # --- LOGICA INTUITIVĂ DE ASCULTARE VOCALĂ ---
     def _seteaza_status_input(self, text_status, culoare_text="#FFFFFF", culoare_bg="#282C34"):
-        """Afișează un mesaj clar în căsuța de jos ca să știi exact când să vorbești."""
         self.entry_input.delete(0, tk.END)
         self.entry_input.config(fg=culoare_text, bg=culoare_bg)
         self.entry_input.insert(0, text_status)
 
     def actualizeaza_stare_mic(self, faza):
-        """Apelată în timp real de listen.py pe măsură ce trece prin etape."""
         if faza == "pregatire":
             self.btn_mic.config(bg="#E5C07B", fg="#1E222A", text="WAIT")
             self.btn_send.config(bg="#4B5263", fg="#ABB2BF", text="PREGĂTESC MIC...")
-            self._seteaza_status_input("⏳ Pregătesc microfonul... Așteaptă o clipă...", "#E5C07B", "#282C34")
+            self._seteaza_status_input("Pregătesc microfonul... Așteaptă o clipă...", "#E5C07B", "#282C34")
         elif faza == "asculta":
-            # Culoare ROȘU APRINS când microfonul chiar captează!
             self.btn_mic.config(bg="#E06C75", fg="white", text="REC")
             self.btn_send.config(bg="#E06C75", fg="white", text="VORBEȘTE ACUM!")
-            self._seteaza_status_input("🔴 TE ASCULT! Vorbește acum...", "#FFFFFF", "#3B2328")
+            self._seteaza_status_input("TE ASCULT! Vorbește acum (RO sau EN)...", "#FFFFFF", "#3B2328")
         elif faza == "procesare":
             self.btn_mic.config(bg="#E5C07B", fg="#1E222A", text="...")
             self.btn_send.config(bg="#E5C07B", fg="#1E222A", text="PROCESEZ VOCEA...")
-            self._seteaza_status_input("⚙️ Procesez cuvintele tale...", "#E5C07B", "#282C34")
+            self._seteaza_status_input("Procesez cuvintele tale...", "#E5C07B", "#282C34")
 
     def declanseaza_ascultare(self):
         if self.ocupat:
@@ -111,14 +129,12 @@ class RobotCompanionUI:
         threading.Thread(target=self.fir_executie_ascultare, daemon=True).start()
 
     def fir_executie_ascultare(self):
-        # Trimitem callback-ul ca interfața să se schimbe exact când se deschide microfonul
         text_recunoscut = asculta_voce(
             on_status=lambda faza: self.root.after(0, self.actualizeaza_stare_mic, faza)
         )
         self.root.after(0, self.finalizare_ascultare, text_recunoscut)
 
     def finalizare_ascultare(self, text):
-        # Resetăm culorile căsuței de input la normal
         self.entry_input.delete(0, tk.END)
         self.entry_input.config(fg="white", bg="#282C34")
         self.btn_mic.config(bg="#C678DD", fg="white", text="MIC")
@@ -217,11 +233,9 @@ class RobotCompanionUI:
             text_final = raspuns.get("mesaj", "Eroare: Răspuns invalid.")
             actiune = raspuns.get("actiune", "info")
             
-            # 1. Afișăm textul pe ecran IMEDIAT
             self.root.after(0, lambda: self.afiseaza_mesaj(f"Robot [{actiune.upper()}]", text_final))
-            self.root.after(0, lambda: self.btn_send.config(text="🔊 VORBESC...", bg="#98C379", fg="#1E222A"))
+            self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
             
-            # 2. Rostim răspunsul în boxe
             vorbeste(text_final, limba="ro")
             
         except Exception as e:

@@ -2,7 +2,7 @@ import tkinter as tk
 from tkinter import scrolledtext
 import threading
 from brain.ai_brain import proceseaza_comanda_ai, genereaza_salut_pornire
-from ears.listen import asculta_voce
+from ears.listen import asculta_voce, preincalzeste_microfon
 from voice.speak import vorbeste
 
 class RobotCompanionUI:
@@ -34,7 +34,7 @@ class RobotCompanionUI:
             wrap=tk.WORD, relief="flat", state=tk.DISABLED
         )
         self.text_display.place(relx=0.05, rely=0.12, relwidth=0.9, relheight=0.58)
-        self.afiseaza_mesaj("Sistem", "Sisteme online. Mă trezesc...")
+        self.afiseaza_mesaj("Sistem", "Sisteme online. Îmi trezesc creierul AI...")
 
         # 3. Zona pentru input
         self.entry_input = tk.Entry(
@@ -75,14 +75,16 @@ class RobotCompanionUI:
 
         self.entry_input.focus_force()
 
-        # 8. Declanșăm automat mesajul de întâmpinare la 0.5 secunde după afișarea ferestrei!
-        self.root.after(500, self.porneste_salut_initial)
+        # 8. Pornim imediat (100ms) salutul AI și pre-încălzirea microfonului în paralel!
+        self.root.after(100, self.porneste_salut_initial)
 
-    # --- SALUTUL DINAMIC DE LA PORNIRE ---
+    # --- SALUTUL DINAMIC 100% AI + PRE-ÎNCĂLZIRE HARDWARE ---
     def porneste_salut_initial(self):
         self.ocupat = True
         self.btn_send.config(text="MĂ TREZESC...", bg="#E5C07B", fg="#1E222A")
         self.btn_mic.config(bg="#4B5263", text="MIC")
+        # Calibrăm microfonul în fundal cât timp Gemini gândește salutul!
+        threading.Thread(target=preincalzeste_microfon, daemon=True).start()
         threading.Thread(target=self.fir_salut_initial, daemon=True).start()
 
     def fir_salut_initial(self):

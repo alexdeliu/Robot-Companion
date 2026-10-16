@@ -6,19 +6,14 @@ import tempfile
 import shutil
 import subprocess
 
-os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
-
 import edge_tts
-import pygame
 
 VOCE_RO = "ro-RO-EmilNeural"
 VOCE_EN = "en-US-ChristopherNeural"
-VITEZA_VOCE = "+8%"  # Ritm natural, vioi și fără pauze lungi
+VITEZA_VOCE = "+8%"
 
 _MIXER_INITIALIZAT = False
 
-# Dicționar fonetic: transformă termenii uzuali din engleză DOAR pentru urechea sintetică,
-# astfel încât vocea românească să îi pronunțe natural, fără să afecteze textul de pe ecran!
 DICTIONAR_PRONUNTIE_EN_RO = {
     "voice": "vois",
     "ears": "iărs",
@@ -42,12 +37,16 @@ DICTIONAR_PRONUNTIE_EN_RO = {
     "setup": "setap",
     "display": "displei",
     "kiosk": "chiosc",
-    "raspberry": "razberi",
+    "raspberry": "rezbări",
     "pi": "pai",
     "python": "paiton",
     "google": "gugăl",
     "gemini": "geminai",
     "github": "ghithab",
+    "youtube": "iutub",
+    "play": "plei",
+    "music": "miuzic",
+    "video": "vidio",
     "branch": "brenci",
     "commit": "comit",
     "merge": "mărg",
@@ -58,6 +57,7 @@ DICTIONAR_PRONUNTIE_EN_RO = {
     "okay": "ochei",
     "ok": "ochei",
     "weekend": "uichend",
+    "weekendul": "uichendul",
     "gaming": "gheming",
     "streaming": "striming",
     "wireless": "uairles",
@@ -67,7 +67,8 @@ DICTIONAR_PRONUNTIE_EN_RO = {
     "mouse": "maus",
     "keyboard": "chibord",
     "smart": "smart",
-    " High Demand": " hai dimend"
+    "fake": "feic",
+    "scrolling": "scroling"
 }
 
 def _obtine_cale_audio_temp():
@@ -76,10 +77,11 @@ def _obtine_cale_audio_temp():
     return os.path.join(tempfile.gettempdir(), "robot_tts.mp3")
 
 def _curata_si_adapteaza_text(text, limba="ro"):
-    """Curăță simbolurile Markdown și adaptează fonetic cuvintele englezești pentru vocea RO."""
+    """Curăță simbolurile Markdown și adaptează fonetic termenii englezești rămași."""
     if not text:
         return ""
-    text_curat = re.sub(r"[\*\#\_\`\~]", "", text)
+    text_curat = text.replace("°C", " grade").replace("°", " grade ").replace("%", " la sută")
+    text_curat = re.sub(r"[\*\#\_\`\~]", "", text_curat)
     text_curat = re.sub(r"\s+", " ", text_curat).strip()
 
     if limba == "ro":
@@ -90,10 +92,7 @@ def _curata_si_adapteaza_text(text, limba="ro"):
     return text_curat
 
 async def _stream_direct_in_boxe_linux(text, voce):
-    """
-    Trimite bucățile audio direct în playerul mpg123 pe măsură ce sunt generate în cloud.
-    Reduce timpul de așteptare de la 2-3 secunde la ~0.3 secunde!
-    """
+    """Trimite bucățile audio direct în mpg123 pe măsură ce sosesc de la server."""
     communicate = edge_tts.Communicate(text, voice=voce, rate=VITEZA_VOCE)
     proces_player = subprocess.Popen(
         ["mpg123", "-q", "-"],
@@ -117,6 +116,8 @@ async def _genereaza_fisier_async(text, voce, cale_fisier):
 
 def _reda_cu_pygame(cale_fisier):
     global _MIXER_INITIALIZAT
+    os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
+    import pygame
     if not _MIXER_INITIALIZAT:
         pygame.mixer.init(frequency=24000, buffer=1024)
         _MIXER_INITIALIZAT = True
@@ -130,18 +131,13 @@ def _reda_cu_pygame(cale_fisier):
     pygame.mixer.music.unload()
 
 def vorbeste(text, limba="ro"):
-    """
-    Redă textul prin boxe cu latență minimă.
-    Pe Raspberry Pi (Linux cu mpg123) face streaming live direct în boxe.
-    Pe Windows folosește pygame.mixer.
-    """
+    """Redă textul prin boxe cu latență minimă."""
     text_adaptat = _curata_si_adapteaza_text(text, limba=limba)
     if not text_adaptat:
         return
 
     voce = VOCE_RO if limba == "ro" else VOCE_EN
 
-    # CALEA ULTRA-RAPIDĂ (Raspberry Pi / Linux): Streaming live în mpg123 fără așteptare după fișier
     if os.name != "nt" and shutil.which("mpg123"):
         try:
             asyncio.run(_stream_direct_in_boxe_linux(text_adaptat, voce))
@@ -149,7 +145,6 @@ def vorbeste(text, limba="ro"):
         except Exception as e:
             print(f"[AVERTISMENT STREAM AUDIO]: {e}, trec pe modul clasic...")
 
-    # CALEA WINDOWS / FALLBACK: Salvare în RAM/Temp și redare prin Pygame
     cale_temp = _obtine_cale_audio_temp()
     try:
         asyncio.run(_genereaza_fisier_async(text_adaptat, voce, cale_temp))
@@ -164,4 +159,4 @@ def vorbeste(text, limba="ro"):
             pass
 
 if __name__ == "__main__":
-    vorbeste("Salut! Am optimizat folderul voice pe Raspberry Pi și acum pronunț perfect și răspund instant!", limba="ro")
+    vorbeste("Salut! Sistemul vocal este optimizat și gata de acțiune!", limba="ro")

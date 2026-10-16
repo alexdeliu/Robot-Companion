@@ -17,7 +17,7 @@ MODEL_PRINCIPAL = 'gemini-3.5-flash-lite'
 MODELE_REZERVA = ['gemini-2.5-flash-lite', 'gemini-2.5-flash']
 
 instructiuni_sistem = """
-Ești "Creierul" unui robot companion fizic de birou. Ești prietenos, inteligent și uneori puțin sarcastic sau glumeț.
+Ești "Creierul" unui robot companion fizic de birou. Ești prietenos, inteligent și uneori puțin sarcastic sau glumeț. 
 Locația ta fizică (acasă) este Timișoara.
 
 Trebuie să răspunzi EXCLUSIV folosind un format JSON valid cu aceste 4 chei:
@@ -31,7 +31,7 @@ Trebuie să răspunzi EXCLUSIV folosind un format JSON valid cu aceste 4 chei:
 Reguli de comportament:
 1. Dacă utilizatorul te întreabă de vreme, folosește "arata_vreme" și extrage orașul.
 2. Dacă primești un mesaj de [SISTEM] cu date meteo brute, răspunde natural (1-3 propoziții scurte). SPECIFICĂ mereu orașul și adaugă personalitate.
-3. Înțelegi perfect și româna și engleza, dar răspunzi MEREU în limba română.
+3. Înțelegi perfect și româna și engleza, dar răspunzi MEREU în limba română. Mesajele utilizatorului pot proveni din recunoaștere vocală printr-un microfon slab; dedu mereu intenția logică din context.
 4. REGULĂ FONETICĂ PENTRU "mesaj_audio": Vocea ta fizică folosește un sintetizator românesc care citește literal. În câmpul "mesaj_audio", transcrie FONETIC cu litere românești ORICE cuvânt, nume sau termen în limba engleză din răspunsul tău (exemple: "voice" -> "vois", "Raspberry Pi" -> "Rezbări Pai", "folder" -> "foldăr", "scrolling" -> "scroling", "upgrade" -> "apgreid", "fake" -> "feic", "AI" -> "ei ai", "OK" -> "ochei") și scrie simbolurile natural ("°C" -> "grade"). În "mesaj" păstrează scrierea normală pentru ecran!
 
 Regulă CRITICĂ: FĂRĂ text pe lângă JSON. Returnează doar obiectul JSON.
@@ -65,7 +65,8 @@ def _trimite_la_gemini(text, limba="ro"):
         raspuns = chat_session.send_message(prompt_complet, config=config_ai)
         return _parseaza_json_ai(raspuns.text)
     except json.JSONDecodeError:
-        return {"actiune": "eroare", "mesaj": "Am avut o mică încurcătură în gândire. Mai spune-mi o dată!"}
+        mesaj_err = "Am avut o mică încurcătură în gândire. Mai spune-mi o dată!"
+        return {"actiune": "eroare", "mesaj": mesaj_err, "mesaj_audio": mesaj_err}
     except Exception as e:
         eroare_str = str(e)
         print(f"[AVERTISMENT AI]: Modelul principal {MODEL_PRINCIPAL} a returnat: {eroare_str}")
@@ -85,15 +86,18 @@ def _trimite_la_gemini(text, limba="ro"):
                 print(f"[AVERTISMENT AI]: Modelul {model_backup} indisponibil ({e_backup})")
 
         # 3. Dacă absolut toate serverele sunt picate sau nu există internet
+        mesaj_aglom = "Serverele mele sunt cam aglomerate în clipa asta. Mai încearcă în câteva secunde!"
         return {
             "actiune": "eroare",
-            "mesaj": "Serverele mele sunt cam aglomerate în clipa asta. Mai încearcă în câteva secunde!"
+            "mesaj": mesaj_aglom,
+            "mesaj_audio": mesaj_aglom
         }
 
-def genereaza_mesaj_bun_venit(limba="ro"):
+def genereaza_salut_pornire(limba="ro"):
     """
     Generează un mesaj de deschidere dinamic când pornește robotul,
     cu o stare de spirit aleasă aleatoriu la fiecare pornire.
+    Returnează un dicționar cu cheile 'mesaj' și 'mesaj_audio' (exact cum cere main.py).
     """
     stari_de_spirit = [
         (
@@ -126,9 +130,16 @@ def genereaza_mesaj_bun_venit(limba="ro"):
     )
 
     rezultat = _trimite_la_gemini(prompt_salut, limba)
-    if rezultat.get("actiune") == "eroare" or not rezultat.get("mesaj"):
-        return mesaj_rezerva
-    return rezultat.get("mesaj")
+    if not isinstance(rezultat, dict) or rezultat.get("actiune") == "eroare" or not rezultat.get("mesaj"):
+        return {
+            "actiune": "vorbeste_normal",
+            "mesaj": mesaj_rezerva,
+            "mesaj_audio": mesaj_rezerva
+        }
+    return rezultat
+
+# Alias de siguranță în caz că vreun script apelează vechiul nume
+genereaza_mesaj_bun_venit = genereaza_salut_pornire
 
 def proceseaza_comanda_ai(text, limba="ro"):
     """Funcția principală apelată de interfața grafică. Aici se execută Tool Calling-ul."""
@@ -150,11 +161,15 @@ def proceseaza_comanda_ai(text, limba="ro"):
         )
         
         raspuns_final = _trimite_la_gemini(prompt_ascuns, limba)
-        raspuns_robot["mesaj"] = raspuns_final.get("mesaj", "Nu am putut citi prognoza.")
+        mesaj_ecran = raspuns_final.get("mesaj", "Nu am putut citi prognoza.")
+        mesaj_voce = raspuns_final.get("mesaj_audio") or mesaj_ecran
+
+        raspuns_robot["mesaj"] = mesaj_ecran
+        raspuns_robot["mesaj_audio"] = mesaj_voce
         raspuns_robot["actiune"] = "arata_vreme"
         
     return raspuns_robot
 
 if __name__ == "__main__":
     print("🧠 Creierul a pornit.")
-    print("Salut generat:", genereaza_mesaj_bun_venit())
+    print("Salut generat:", genereaza_salut_pornire())

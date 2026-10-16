@@ -26,6 +26,8 @@ Trebuie să răspunzi EXCLUSIV folosind un format JSON valid:
 Reguli de comportament:
 1. Dacă utilizatorul te întreabă de vreme, folosește "arata_vreme" și extrage orașul.
 2. Dacă primești un mesaj de [SISTEM] cu date meteo brute, răspunde natural folosind acele date. SPECIFICĂ mereu cuvântul/orașul despre care vorbești în răspunsul tău. Adaugă personalitate (ex: bucură-te dacă e cald, comentează dacă plouă).
+3. Mesajele utilizatorului pot proveni din recunoaștere vocală printr-un microfon slab (unele cuvinte pot fi transcrise greșit fonetic). Dedu mereu intenția logică din context fără să menționezi greșelile de transcriere.
+
 Regulă CRITICĂ: FĂRĂ text pe lângă JSON. Returnează doar obiectul JSON.
 """
 

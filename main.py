@@ -1,15 +1,17 @@
+import time
 import tkinter as tk
 from tkinter import scrolledtext
 import threading
 from brain.ai_brain import proceseaza_comanda_ai, genereaza_salut_pornire
 from ears.listen import asculta_voce, preincalzeste_microfon
-from voice.speak import vorbeste
+from voice.speak import vorbeste, StreamVorbeste
+
 
 class RobotCompanionUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Robot Companion")
-        
+
         self.ocupat = False
 
         # --- SECRETUL PENTRU KIOSK MODE PERFECT ---
@@ -20,15 +22,12 @@ class RobotCompanionUI:
         self.root.configure(bg="#1E222A")
 
         # --- CONSTRUIREA INTERFEȚEI ---
-        
-        # 1. Buton Ieșire
         self.btn_exit = tk.Button(
-            self.root, text="X", font=("Arial", 12, "bold"), 
+            self.root, text="X", font=("Arial", 12, "bold"),
             bg="#E06C75", fg="white", command=self.root.destroy, relief="flat"
         )
         self.btn_exit.place(relx=0.88, rely=0.02, relwidth=0.1, relheight=0.1)
 
-        # 2. Zona de afișare text
         self.text_display = scrolledtext.ScrolledText(
             self.root, font=("Arial", 12), bg="#1E222A", fg="#ABB2BF",
             wrap=tk.WORD, relief="flat", state=tk.DISABLED
@@ -36,15 +35,13 @@ class RobotCompanionUI:
         self.text_display.place(relx=0.05, rely=0.12, relwidth=0.9, relheight=0.58)
         self.afiseaza_mesaj("Sistem", "Sisteme online. Îmi trezesc creierul AI...")
 
-        # 3. Zona pentru input
         self.entry_input = tk.Entry(
-            self.root, font=("Arial", 14, "bold"), 
+            self.root, font=("Arial", 14, "bold"),
             bg="#282C34", fg="white", insertbackground="white", relief="flat"
         )
         self.entry_input.place(relx=0.05, rely=0.72, relwidth=0.9, relheight=0.12)
         self.entry_input.bind("<Return>", lambda event: self.start_procesare())
 
-        # 4. Buton Tastatură Virtuală (stânga jos)
         self.tastatura_activa = False
         self.btn_kb = tk.Button(
             self.root, text="KB", font=("Arial", 14, "bold"),
@@ -53,7 +50,6 @@ class RobotCompanionUI:
         )
         self.btn_kb.place(relx=0.05, rely=0.86, relwidth=0.15, relheight=0.12)
 
-        # 5. Buton Microfon (la mijloc)
         self.btn_mic = tk.Button(
             self.root, text="MIC", font=("Arial", 14, "bold"),
             bg="#C678DD", fg="white", activebackground="#C678DD", activeforeground="white",
@@ -61,40 +57,68 @@ class RobotCompanionUI:
         )
         self.btn_mic.place(relx=0.22, rely=0.86, relwidth=0.15, relheight=0.12)
 
-        # 6. Butonul TRIMITE (în dreapta)
         self.btn_send = tk.Button(
             self.root, text="TRIMITE", font=("Arial", 12, "bold"),
             bg="#61AFEF", fg="#1E222A", activebackground="#61AFEF", activeforeground="#1E222A",
             command=self.start_procesare, relief="flat"
         )
         self.btn_send.place(relx=0.39, rely=0.86, relwidth=0.56, relheight=0.12)
-        
-        # 7. Containerul Tastaturii Virtuale
+
         self.frame_kb = tk.Frame(self.root, bg="#1E222A")
         self.construieste_tastatura()
 
         self.entry_input.focus_force()
-
-        # 8. Pornim imediat (100ms) salutul AI și pre-încălzirea microfonului în paralel!
         self.root.after(100, self.porneste_salut_initial)
+
+    # --- STREAMING ÎN UI (CUVÂNT CU CUVÂNT) ---
+    def afiseaza_mesaj(self, expeditor, mesaj):
+        self.text_display.config(state=tk.NORMAL)
+        self.text_display.insert(tk.END, f"{expeditor}: {mesaj}\n\n")
+        self.text_display.see(tk.END)
+        self.text_display.config(state=tk.DISABLED)
+
+    def _incepe_mesaj_stream(self, expeditor):
+        self.text_display.config(state=tk.NORMAL)
+        self.text_display.insert(tk.END, f"{expeditor}: ")
+        self.text_display.see(tk.END)
+        self.text_display.config(state=tk.DISABLED)
+
+    def _adauga_chunk_stream(self, bucata_text):
+        self.text_display.config(state=tk.NORMAL)
+        self.text_display.insert(tk.END, bucata_text)
+        self.text_display.see(tk.END)
+        self.text_display.config(state=tk.DISABLED)
+
+    def _incheie_mesaj_stream(self):
+        self.text_display.config(state=tk.NORMAL)
+        self.text_display.insert(tk.END, "\n\n")
+        self.text_display.see(tk.END)
+        self.text_display.config(state=tk.DISABLED)
 
     # --- SALUTUL DINAMIC 100% AI + PRE-ÎNCĂLZIRE HARDWARE ---
     def porneste_salut_initial(self):
         self.ocupat = True
         self.btn_send.config(text="MĂ TREZESC...", bg="#E5C07B", fg="#1E222A")
         self.btn_mic.config(bg="#4B5263", text="MIC")
-        # Calibrăm microfonul în fundal cât timp Gemini gândește salutul!
         threading.Thread(target=preincalzeste_microfon, daemon=True).start()
         threading.Thread(target=self.fir_salut_initial, daemon=True).start()
 
     def fir_salut_initial(self):
         try:
-            raspuns = genereaza_salut_pornire(limba="ro")
-            text_ecran = raspuns.get("mesaj", "Salut! Sunt gata de treabă!")
-            text_voce = raspuns.get("mesaj_audio") or text_ecran
-            self.root.after(0, lambda: self.afiseaza_mesaj("Robot [SALUT]", text_ecran))
-            self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
-            vorbeste(text_voce, limba="ro")
+            t_start = time.perf_counter()
+            stream_tts = StreamVorbeste(limba="ro", t_referinta=t_start)
+            self.root.after(0, self._incepe_mesaj_stream, "Robot [SALUT]")
+
+            def la_chunk(c):
+                self.root.after(0, self._adauga_chunk_stream, c)
+
+            def la_propozitie(p):
+                self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
+                stream_tts.adauga_propozitie(p)
+
+            genereaza_salut_pornire(limba="ro", on_text_chunk=la_chunk, on_propozitie=la_propozitie)
+            self.root.after(0, self._incheie_mesaj_stream)
+            stream_tts.asteapta_finalizarea()
         except Exception as e:
             print(f"[EROARE SALUT]: {e}")
         finally:
@@ -135,6 +159,9 @@ class RobotCompanionUI:
         text_recunoscut = asculta_voce(
             on_status=lambda faza: self.root.after(0, self.actualizeaza_stare_mic, faza)
         )
+        if not text_recunoscut:
+            # Feedback vocal scurt fără să blocheze aplicația
+            threading.Thread(target=vorbeste, args=("N-am înțeles, repetă te rog.", "ro"), daemon=True).start()
         self.root.after(0, self.finalizare_ascultare, text_recunoscut)
 
     def finalizare_ascultare(self, text):
@@ -149,7 +176,7 @@ class RobotCompanionUI:
         else:
             self.ocupat = False
             self.btn_send.config(bg="#61AFEF", fg="#1E222A", text="TRIMITE")
-            self.afiseaza_mesaj("Sistem", "Nu am prins ce ai spus. Apasă pe MIC și vorbește când apare bara ROȘIE.")
+            self.afiseaza_mesaj("Sistem", "N-am înțeles, repetă te rog.")
 
     # --- LOGICA TASTATURII VIRTUALE ---
     def construieste_tastatura(self):
@@ -160,16 +187,16 @@ class RobotCompanionUI:
             ['z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '?'],
             ['SPACE', 'DEL', 'CLR']
         ]
-        
+
         for rand in randuri:
             frame_rand = tk.Frame(self.frame_kb, bg="#1E222A")
             frame_rand.pack(fill="both", expand=True, pady=1)
             for cheie in rand:
                 culoare_bg = "#E06C75" if cheie in ['DEL', 'CLR'] else "#3B4252"
                 text_btn = cheie if len(cheie) > 1 else cheie.upper()
-                
+
                 btn = tk.Button(
-                    frame_rand, text=text_btn, font=("Arial", 10, "bold"), 
+                    frame_rand, text=text_btn, font=("Arial", 10, "bold"),
                     bg=culoare_bg, fg="white", relief="flat",
                     command=lambda c=cheie: self.apasa_tasta(c)
                 )
@@ -203,27 +230,21 @@ class RobotCompanionUI:
             self.btn_kb.config(bg="#98C379")
             self.tastatura_activa = True
 
-    # --- LOGICA AI + SINTEZĂ VOCALĂ ---
-    def afiseaza_mesaj(self, expeditor, mesaj):
-        self.text_display.config(state=tk.NORMAL)
-        self.text_display.insert(tk.END, f"{expeditor}: {mesaj}\n\n")
-        self.text_display.see(tk.END)
-        self.text_display.config(state=tk.DISABLED)
-
+    # --- LOGICA AI STREAMING + TTS ÎN PARALEL ---
     def start_procesare(self):
         if self.ocupat:
             return
         mesaj_utilizator = self.entry_input.get()
         if not mesaj_utilizator.strip():
             return
-            
+
         self.ocupat = True
         self.entry_input.delete(0, tk.END)
         self.afiseaza_mesaj("Tu", mesaj_utilizator)
-        
+
         if self.tastatura_activa:
             self.toggle_tastatura()
-            
+
         self.btn_send.config(text="GÂNDESC...", bg="#E5C07B", fg="#1E222A")
         self.btn_mic.config(bg="#4B5263", text="MIC")
         self.root.update()
@@ -232,16 +253,32 @@ class RobotCompanionUI:
 
     def obtine_raspuns(self, mesaj):
         try:
-            raspuns = proceseaza_comanda_ai(mesaj, limba="ro")
-            text_final = raspuns.get("mesaj", "Eroare: Răspuns invalid.")
-            text_voce = raspuns.get("mesaj_audio") or text_final
-            actiune = raspuns.get("actiune", "info")
-            
-            self.root.after(0, lambda: self.afiseaza_mesaj(f"Robot [{actiune.upper()}]", text_final))
-            self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
-            
-            vorbeste(text_voce, limba="ro")
-            
+            t_start = time.perf_counter()
+            stream_tts = StreamVorbeste(limba="ro", t_referinta=t_start)
+            antet_afisat = False
+
+            def la_chunk(c):
+                nonlocal antet_afisat
+                if not antet_afisat:
+                    antet_afisat = True
+                    self.root.after(0, self._incepe_mesaj_stream, "Robot")
+                self.root.after(0, self._adauga_chunk_stream, c)
+
+            def la_propozitie(p):
+                self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
+                stream_tts.adauga_propozitie(p)
+
+            proceseaza_comanda_ai(
+                mesaj,
+                limba="ro",
+                on_text_chunk=la_chunk,
+                on_propozitie=la_propozitie
+            )
+            if antet_afisat:
+                self.root.after(0, self._incheie_mesaj_stream)
+
+            stream_tts.asteapta_finalizarea()
+
         except Exception as e:
             self.root.after(0, lambda: self.afiseaza_mesaj("Eroare Sistem", f"Eroare: {e}"))
         finally:
@@ -251,6 +288,7 @@ class RobotCompanionUI:
         self.ocupat = False
         self.btn_send.config(text="TRIMITE", bg="#61AFEF", fg="#1E222A")
         self.btn_mic.config(text="MIC", bg="#C678DD", fg="white")
+
 
 if __name__ == "__main__":
     app = tk.Tk()

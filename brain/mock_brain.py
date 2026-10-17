@@ -1,34 +1,23 @@
-def proceseaza_comanda(text, limba):
-    text = text.lower()
-    
-    if "vreme" in text or "weather" in text:
-        if limba == "ro":
-            return {"actiune": "arata_vreme", "mesaj": "Afară plouă."}
-        else:
-            return {"actiune": "arata_vreme", "mesaj": "It is raining outside."}
-            
-    elif "gluma" in text or "joke" in text:
-        if limba == "ro":
-            return {"actiune": "spune_gluma", "mesaj": "Ce face un hacker pe barcă? Piraterie!"}
-        else:
-            return {"actiune": "spune_gluma", "mesaj": "Why do programmers prefer dark mode? Because light attracts bugs!"}
-            
-    else:
-        if limba == "ro":
-            return {"actiune": "vorbeste_normal", "mesaj": "Te ascult."}
-        else:
-            return {"actiune": "vorbeste_normal", "mesaj": "I am listening."}
+def genereaza_salut_pornire(limba="ro", on_text_chunk=None, on_propozitie=None):
+    salut = "Salut! Rulez în modul offline de test (Mock Brain)."
+    if on_text_chunk:
+        on_text_chunk(salut)
+    if on_propozitie:
+        on_propozitie(salut)
+    return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": salut}
 
-if __name__ == "__main__":
-    # Aici setăm limba manual pentru test: "ro" sau "en"
-    limba_selectata = "ro" 
-    print(f"Robotul a pornit în limba: {limba_selectata.upper()}")
-    
-    while True:
-        intrare = input("Tu: ")
-        if intrare.lower() == "exit":
-            break
-            
-        # Acum funcția primește și textul, și limba!
-        raspuns_robot = proceseaza_comanda(intrare, limba_selectata)
-        print(f"Robotul: {raspuns_robot}\n")
+
+def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=None):
+    t = text.lower()
+    if "vreme" in t or "weather" in t:
+        rasp = {"actiune": "arata_vreme", "parametru": "Timișoara", "mesaj": "În Timișoara sunt 20°C și cer senin (mod test)."}
+    elif "glum" in t or "joke" in t:
+        rasp = {"actiune": "spune_gluma", "parametru": "", "mesaj": "Ce face un hacker pe barcă? Piraterie!"}
+    else:
+        rasp = {"actiune": "vorbeste_normal", "parametru": "", "mesaj": f"Am recepționat în modul test: {text}"}
+
+    if on_text_chunk:
+        on_text_chunk(rasp["mesaj"])
+    if on_propozitie:
+        on_propozitie(rasp["mesaj"])
+    return rasp

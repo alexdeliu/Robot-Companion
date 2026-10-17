@@ -8,13 +8,12 @@ import speech_recognition as sr
 DEBUG = os.getenv("DEBUG", "1") == "1"
 
 _MIC_INDEX_CACHE = None
-_SAMPLE_RATE_CACHE = None
 _CALIBRAT_INITIAL = False
 
 
 @contextmanager
 def ignore_stderr():
-    """Suprimă erorile C/ALSA/JACK din terminal pe Linux în timpul inițializării PyAudio."""
+    """Suprimă complet erorile C/ALSA/JACK din terminal pe Linux în timpul folosirii PyAudio."""
     try:
         devnull = os.open(os.devnull, os.O_WRONLY)
         old_stderr = os.dup(2)
@@ -31,12 +30,12 @@ def ignore_stderr():
 
 
 recognizer = sr.Recognizer()
-recognizer.dynamic_energy_threshold = True
-recognizer.dynamic_energy_adjustment_damping = 0.15
-recognizer.dynamic_energy_ratio = 1.5
-recognizer.energy_threshold = 180
-recognizer.non_speaking_duration = 0.4
-recognizer.pause_threshold = 1.05
+# Prag fixat după calibrarea la rece (nu îl lăsăm să scadă sub zgomotul camerei!)
+recognizer.dynamic_energy_threshold = False
+recognizer.energy_threshold = 380
+recognizer.non_speaking_duration = 0.35
+# Se oprește la 0.85s după ce ai terminat propoziția (permite pauze scurte de respirație, dar nu stă blocat!)
+recognizer.pause_threshold = 0.85
 recognizer.phrase_threshold = 0.25
 
 
@@ -59,52 +58,43 @@ def _obtine_index_microfon():
     return _MIC_INDEX_CACHE
 
 
-def _deschide_microfon(mic_index):
-    """Deschide microfonul la 16000 Hz (optim pentru STT), cu fallback automat la 8000 Hz."""
-    global _SAMPLE_RATE_CACHE
-    rate_de_incercat = [_SAMPLE_RATE_CACHE] if _SAMPLE_RATE_CACHE else [16000, 8000]
-
-    for rata in rate_de_incercat:
-        try:
-            chunk = 1024 if rata == 16000 else 512
-            with ignore_stderr():
-                src = sr.Microphone(device_index=mic_index, sample_rate=rata, chunk_size=chunk)
-            _SAMPLE_RATE_CACHE = rata
-            return src
-        except Exception:
-            continue
-
-    with ignore_stderr():
-        return sr.Microphone(device_index=mic_index)
-
-
 def preincalzeste_microfon():
-    """Calibrează microfonul în fundal la pornirea aplicației."""
+    """
+    Măsoară zgomotul real al camerei web USB la pornire (cu ALSA stderr complet ascuns)
+    și setează pragul cu 35% PESTE zgomotul de fond ca să nu rămână blocat pe înregistrare!
+    """
     global _CALIBRAT_INITIAL
     if _CALIBRAT_INITIAL:
         return
     try:
         mic_index = _obtine_index_microfon()
-        source = _deschide_microfon(mic_index)
-        with source:
-            recognizer.adjust_for_ambient_noise(source, duration=0.3)
-            recognizer.energy_threshold = max(150, min(300, int(recognizer.energy_threshold)))
-            _CALIBRAT_INITIAL = True
+        # ATENȚIE: atât crearea Microphone cât și 'with source:' stau în ignore_stderr()!
+        with ignore_stderr():
+            source = sr.Microphone(device_index=mic_index, sample_rate=8000, chunk_size=512)
+            with source:
+                recognizer.adjust_for_ambient_noise(source, duration=0.4)
+                zgomot_ambiant = recognizer.energy_threshold
+                # Punem pragul cu 35% peste zgomotul de fond (între 300 și 900)
+                recognizer.energy_threshold = max(300, min(900, int(zgomot_ambiant * 1.35)))
+                _CALIBRAT_INITIAL = True
         if DEBUG:
-            print(f"[SISTEM]: Microfon pre-încălzit ({_SAMPLE_RATE_CACHE} Hz | Prag: {recognizer.energy_threshold})")
+            print(
+                f"[SISTEM]: Microfon pre-încălzit (8000 Hz | "
+                f"Zgomot fond: {int(zgomot_ambiant)} -> Prag voce: {recognizer.energy_threshold})"
+            )
     except Exception as e:
         if DEBUG:
             print(f"[AVERTISMENT PRE-ÎNCĂLZIRE MIC]: {e}")
 
 
-def _curata_dc_si_normalizeaza_bland(audio_data):
+def _curata_si_amplifica_vocea(audio_data):
     """
-    Elimină doar DC-offset-ul și aplică un gain blând (max 2.0x) doar dacă vocea este foarte slabă,
-    fără a distorsiona armonicile și fără a ridica agresiv zgomotul de fond.
+    1. Elimină DC-offset-ul camerei USB.
+    2. Aplică un pre-emphasis fin (0.25) pentru claritatea consoanelor la 8000 Hz.
+    3. Normalizează volumul până la ~75% din maxim (max 3.0x) fără clipping.
     """
     try:
-        rata = audio_data.sample_rate
-        raw_bytes = audio_data.get_raw_data(convert_rate=rata, convert_width=2)
+        raw_bytes = audio_data.get_raw_data(convert_rate=8000, convert_width=2)
         samples = array("h", raw_bytes)
         n = len(samples)
         if n == 0:
@@ -113,25 +103,24 @@ def _curata_dc_si_normalizeaza_bland(audio_data):
         dc_offset = int(sum(samples) / n)
         max_peak = max(abs(x - dc_offset) for x in samples)
 
-        gain = 1.0
-        if 300 < max_peak < 12000:
-            gain = min(2.0, 20000.0 / float(max_peak))
-
-        if dc_offset == 0 and gain <= 1.05:
-            return audio_data
+        gain = min(3.0, 24000.0 / float(max_peak)) if max_peak > 350 else 1.0
 
         out = array("h", [0] * n)
-        for i in range(n):
-            val = int((samples[i] - dc_offset) * gain)
-            out[i] = max(-32768, min(32767, val))
+        prev = samples[0] - dc_offset
+        out[0] = max(-32768, min(32767, int(prev * gain)))
 
-        return sr.AudioData(out.tobytes(), rata, 2)
+        for i in range(1, n):
+            curr = samples[i] - dc_offset
+            val = int((curr + 0.25 * (curr - prev)) * gain)
+            out[i] = max(-32768, min(32767, val))
+            prev = curr
+
+        return sr.AudioData(out.tobytes(), 8000, 2)
     except Exception:
         return audio_data
 
 
 def _extrage_cel_mai_bun_text(rezultat):
-    """Alege cea mai completă alternativă din răspunsul Google STT."""
     if not isinstance(rezultat, dict) or "alternative" not in rezultat:
         return None, 0.0
     alt_list = rezultat["alternative"]
@@ -153,7 +142,6 @@ def _extrage_cel_mai_bun_text(rezultat):
 
 
 def _apel_stt_cu_retry(audio_curat, limba):
-    """Apel Google STT cu 1 retry rapid în caz de eroare temporară de rețea."""
     for incercare in range(2):
         try:
             rez = recognizer.recognize_google(audio_curat, language=limba, show_all=True)
@@ -168,7 +156,7 @@ def _apel_stt_cu_retry(audio_curat, limba):
 
 
 def asculta_voce(on_status=None):
-    """Ascultă microfonul la 16 kHz, suportă fraze complexe și RO/EN."""
+    """Ascultă microfonul fără erori ALSA și se oprește rapid după ce termini propoziția."""
     global _CALIBRAT_INITIAL
 
     if on_status:
@@ -177,27 +165,30 @@ def asculta_voce(on_status=None):
     mic_index = _obtine_index_microfon()
 
     try:
-        source = _deschide_microfon(mic_index)
-        with source:
-            if not _CALIBRAT_INITIAL:
-                recognizer.adjust_for_ambient_noise(source, duration=0.25)
-                _CALIBRAT_INITIAL = True
+        # Tot blocul PyAudio rulează sub ignore_stderr() -> zero mesaje ALSA/JACK în consolă!
+        with ignore_stderr():
+            source = sr.Microphone(device_index=mic_index, sample_rate=8000, chunk_size=512)
+            with source:
+                if not _CALIBRAT_INITIAL:
+                    recognizer.adjust_for_ambient_noise(source, duration=0.35)
+                    zgomot = recognizer.energy_threshold
+                    recognizer.energy_threshold = max(300, min(900, int(zgomot * 1.35)))
+                    _CALIBRAT_INITIAL = True
 
-            # Plafonăm pragul adaptiv ca să rămână mereu receptiv
-            recognizer.energy_threshold = max(150, min(320, int(recognizer.energy_threshold)))
+                if on_status:
+                    on_status("asculta")
+                if DEBUG:
+                    print(f"\n[ROBOT]: Te ascult! (8000 Hz | Prag voce: {recognizer.energy_threshold})")
 
-            if on_status:
-                on_status("asculta")
-            if DEBUG:
-                print(f"\n[ROBOT]: Te ascult! ({_SAMPLE_RATE_CACHE} Hz | Prag: {recognizer.energy_threshold})")
-
-            audio_brut = recognizer.listen(source, timeout=6, phrase_time_limit=15)
+                t_rec = time.perf_counter()
+                audio_brut = recognizer.listen(source, timeout=6, phrase_time_limit=10)
+                durata_rec = time.perf_counter() - t_rec
 
         if on_status:
             on_status("procesare")
 
         t_stt = time.perf_counter()
-        audio_curat = _curata_dc_si_normalizeaza_bland(audio_brut)
+        audio_curat = _curata_si_amplifica_vocea(audio_brut)
 
         if DEBUG:
             cale_debug = "/dev/shm/debug.wav" if os.path.isdir("/dev/shm") else "debug.wav"
@@ -206,14 +197,16 @@ def asculta_voce(on_status=None):
 
         text_ro, scor_ro = _apel_stt_cu_retry(audio_curat, "ro-RO")
 
-        # Apelăm en-US doar dacă ro-RO nu a găsit nimic sau are scor foarte mic pe o frază scurtă
         if not text_ro or (scor_ro < 0.55 and len(text_ro.split()) <= 2):
             text_en, scor_en = _apel_stt_cu_retry(audio_curat, "en-US")
             if text_en and scor_en > scor_ro:
                 text_ro = text_en
 
         if DEBUG:
-            print(f"[TIMPI DEBUG]: STT={time.perf_counter() - t_stt:.2f}s | Text='{text_ro}'")
+            print(
+                f"[TIMPI DEBUG]: Captură microfon={durata_rec:.2f}s | "
+                f"STT Google={time.perf_counter() - t_stt:.2f}s | Text='{text_ro}'"
+            )
 
         return text_ro
 

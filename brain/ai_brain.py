@@ -14,15 +14,20 @@ load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY")
 DEBUG = os.getenv("DEBUG", "1") == "1"
 
-# Client cu timeout explicit (6000 ms = 6s) pentru a evita blocajele de 20s pe conexiuni aglomerate
+# Client cu timeout explicit (8000 ms = 8s)
 client = genai.Client(
     api_key=API_KEY,
-    http_options=types.HttpOptions(timeout=6000)
+    http_options=types.HttpOptions(timeout=8000)
 )
 
-# Modele reale, ordonate după viteză (Time-To-First-Token minim)
-MODEL_PRINCIPAL = "gemini-2.5-flash-lite"
-MODELE_REZERVA = ["gemini-2.5-flash", "gemini-2.0-flash"]
+# Modelele reale disponibile în contul tău (verificate cu search_aimodels.py)
+MODEL_PRINCIPAL = "gemini-3.5-flash-lite"
+MODELE_REZERVA = [
+    "gemini-3.5-flash",
+    "gemini-3.8-flash",
+    "gemini-3.1-flash-lite",
+    "gemini-flash-lite-latest"
+]
 
 instructiuni_sistem = """Ești "Creierul" unui robot companion fizic de birou din Timișoara. Ești prietenos, inteligent, spontan și uneori puțin sarcastic sau glumeț.
 Reguli:
@@ -73,18 +78,41 @@ def _detecteaza_oras_rapid(text):
     return "Timișoara"
 
 
-def _config_rapid(temperatura=0.7):
-    return types.GenerateContentConfig(
-        system_instruction=instructiuni_sistem,
-        temperature=temperatura,
-        max_output_tokens=280,
-        thinking_config=types.ThinkingConfig(thinking_budget=0)
-    )
+def _deschide_stream_model(model_curent, continut_apel, temperatura):
+    """
+    Încearcă deschiderea stream-ului cu thinking_budget=0 (pentru latență minimă).
+    Dacă modelul respectiv nu suportă parametrul thinking_config, reîncearcă instant fără el.
+    """
+    try:
+        cfg_rapid = types.GenerateContentConfig(
+            system_instruction=instructiuni_sistem,
+            temperature=temperatura,
+            max_output_tokens=280,
+            thinking_config=types.ThinkingConfig(thinking_budget=0)
+        )
+        return client.models.generate_content_stream(
+            model=model_curent,
+            contents=continut_apel,
+            config=cfg_rapid
+        )
+    except Exception as e:
+        if "thinking" in str(e).lower() or "400" in str(e):
+            cfg_standard = types.GenerateContentConfig(
+                system_instruction=instructiuni_sistem,
+                temperature=temperatura,
+                max_output_tokens=280
+            )
+            return client.models.generate_content_stream(
+                model=model_curent,
+                contents=continut_apel,
+                config=cfg_standard
+            )
+        raise
 
 
 def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on_text_chunk=None, on_propozitie=None):
     """
-    Streaming LLM cu latență minimă (thinking_budget=0), fallback automat la 503/timeout
+    Streaming LLM cu modelele 3.5 / 3.8, fallback automat la 503/timeout
     și trimitere simultană către UI (on_text_chunk) și TTS (on_propozitie).
     """
     global istoric_conversatie
@@ -97,7 +125,6 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on
     with _istoric_lock:
         continut_apel = list(istoric_conversatie) + [mesaj_user]
 
-    config_ai = _config_rapid(temperatura)
     toate_modelele = [MODEL_PRINCIPAL] + MODELE_REZERVA
 
     for model_curent in toate_modelele:
@@ -110,11 +137,7 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on
             parametru = ""
             text_afisat = ""
 
-            stream = client.models.generate_content_stream(
-                model=model_curent,
-                contents=continut_apel,
-                config=config_ai
-            )
+            stream = _deschide_stream_model(model_curent, continut_apel, temperatura)
 
             for chunk in stream:
                 bucata = chunk.text or ""
@@ -148,7 +171,6 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on
                     if on_text_chunk:
                         on_text_chunk(bucata)
 
-                # Trimitem fiecare propoziție completă direct spre TTS cât timp LLM încă scrie!
                 if tag_parsat and on_propozitie and actiune != "arata_vreme":
                     parti = _REGEX_SPLIT_PROPOZITIE.split(buffer_propozitii)
                     if len(parti) > 1:
@@ -157,7 +179,6 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on
                                 on_propozitie(prop.strip())
                         buffer_propozitii = parti[-1]
 
-            # Dacă răspunsul a fost foarte scurt și nu a ajuns la35 caractere fără ']'
             if not tag_parsat and buffer_complet.strip():
                 m = _REGEX_TAG.match(buffer_complet)
                 if m:
@@ -265,10 +286,7 @@ genereaza_mesaj_bun_venit = genereaza_salut_pornire
 
 
 def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=None):
-    """
-    Procesează comanda cu Streaming în UI și TTS.
-    Include One-Shot Weather și fallback la Tool Calling pentru cereri meteo implicite.
-    """
+    """Procesează comanda cu Streaming în UI și TTS."""
     if CUVINTE_CHEIE_METEO.search(text):
         oras_detectat = _detecteaza_oras_rapid(text)
         raport_date = get_weather(oras_detectat)

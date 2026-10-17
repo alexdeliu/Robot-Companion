@@ -4,7 +4,7 @@ from tkinter import scrolledtext
 import threading
 from brain.ai_brain import proceseaza_comanda_ai, genereaza_salut_pornire
 from ears.listen import asculta_voce, preincalzeste_microfon
-from voice.speak import vorbeste, StreamVorbeste
+from voice.speak import vorbeste
 
 
 class RobotCompanionUI:
@@ -107,20 +107,18 @@ class RobotCompanionUI:
 
     def fir_salut_initial(self):
         try:
-            t_start = time.perf_counter()
-            stream_tts = StreamVorbeste(limba="ro", t_referinta=t_start)
             self.root.after(0, self._incepe_mesaj_stream, "Robot [SALUT]")
 
             def la_chunk(c):
                 self.root.after(0, self._adauga_chunk_stream, c)
 
-            def la_propozitie(p):
-                self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
-                stream_tts.adauga_propozitie(p)
-
-            genereaza_salut_pornire(limba="ro", on_text_chunk=la_chunk, on_propozitie=la_propozitie)
+            rez = genereaza_salut_pornire(limba="ro", on_text_chunk=la_chunk)
             self.root.after(0, self._incheie_mesaj_stream)
-            stream_tts.asteapta_finalizarea()
+
+            text_salut = rez.get("mesaj", "")
+            if text_salut:
+                self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
+                vorbeste(text_salut, limba="ro")
         except Exception as e:
             print(f"[EROARE SALUT]: {e}")
         finally:
@@ -162,7 +160,6 @@ class RobotCompanionUI:
             on_status=lambda faza: self.root.after(0, self.actualizeaza_stare_mic, faza)
         )
         if not text_recunoscut:
-            # Feedback vocal scurt fără să blocheze aplicația
             threading.Thread(target=vorbeste, args=("N-am înțeles, repetă te rog.", "ro"), daemon=True).start()
         self.root.after(0, self.finalizare_ascultare, text_recunoscut)
 
@@ -232,7 +229,7 @@ class RobotCompanionUI:
             self.btn_kb.config(bg="#98C379")
             self.tastatura_activa = True
 
-    # --- LOGICA AI STREAMING + TTS ÎN PARALEL ---
+    # --- LOGICA AI STREAMING ÎN UI + VOCE FLUENTĂ ---
     def start_procesare(self):
         if self.ocupat:
             return
@@ -255,8 +252,6 @@ class RobotCompanionUI:
 
     def obtine_raspuns(self, mesaj):
         try:
-            t_start = time.perf_counter()
-            stream_tts = StreamVorbeste(limba="ro", t_referinta=t_start)
             antet_afisat = False
 
             def la_chunk(c):
@@ -266,20 +261,18 @@ class RobotCompanionUI:
                     self.root.after(0, self._incepe_mesaj_stream, "Robot")
                 self.root.after(0, self._adauga_chunk_stream, c)
 
-            def la_propozitie(p):
-                self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
-                stream_tts.adauga_propozitie(p)
-
-            proceseaza_comanda_ai(
+            rez = proceseaza_comanda_ai(
                 mesaj,
                 limba="ro",
-                on_text_chunk=la_chunk,
-                on_propozitie=la_propozitie
+                on_text_chunk=la_chunk
             )
             if antet_afisat:
                 self.root.after(0, self._incheie_mesaj_stream)
 
-            stream_tts.asteapta_finalizarea()
+            text_final = rez.get("mesaj", "")
+            if text_final:
+                self.root.after(0, lambda: self.btn_send.config(text="VORBESC...", bg="#98C379", fg="#1E222A"))
+                vorbeste(text_final, limba="ro")
 
         except Exception as e:
             self.root.after(0, lambda: self.afiseaza_mesaj("Eroare Sistem", f"Eroare: {e}"))

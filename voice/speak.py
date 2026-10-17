@@ -1,13 +1,12 @@
 import os
-import io
 import re
 import json
 import time
-import queue
 import shutil
 import asyncio
-import threading
+import tempfile
 import subprocess
+import unicodedata
 import edge_tts
 
 DEBUG = os.getenv("DEBUG", "1") == "1"
@@ -23,7 +22,6 @@ def _incarca_dictionar():
     try:
         with open(_CALE_DICT, "r", encoding="utf-8") as f:
             date = json.load(f)
-        # Sortăm descrescător după lungime ca expresiile ("raspberry pi") să fie înlocuite înaintea cuvintelor simple
         return sorted(date.items(), key=lambda x: len(x[0]), reverse=True)
     except Exception:
         return []
@@ -36,80 +34,65 @@ _ABREVIERI_RO = [
     (re.compile(r"(\d+(?:[.,]\d+)?)\s*°\s*C\b", re.IGNORECASE), r"\1 grade Celsius"),
     (re.compile(r"(?<!\w)-(\d+(?:[.,]\d+)?)\s*°", re.IGNORECASE), r"minus \1 grade "),
     (re.compile(r"(\d+(?:[.,]\d+)?)\s*°", re.IGNORECASE), r"\1 grade "),
-    (re.compile(r"\b(\d{1,2}):(\d{2})\b"), r"\1 și \2 de minute"),
     (re.compile(r"(\d+)\s*%"), r"\1 la sută"),
     (re.compile(r"\bkm/h\b", re.IGNORECASE), "kilometri pe oră"),
-    (re.compile(r"\bm/s\b", re.IGNORECASE), "metri pe secundă"),
-    (re.compile(r"\bnr\.\s*", re.IGNORECASE), "numărul "),
-    (re.compile(r"\bex:\s*", re.IGNORECASE), "de exemplu "),
 ]
 
 
+def _obtine_cale_audio_temp():
+    """Salvează în RAM (/dev/shm) pe Raspberry Pi pentru viteză maximă și zero uzură SD."""
+    if os.path.isdir("/dev/shm"):
+        return "/dev/shm/robot_tts.mp3"
+    return os.path.join(tempfile.gettempdir(), "robot_tts.mp3")
+
+
 def _curata_si_adapteaza_text(text, limba="ro"):
-    """Normalizează simboluri, numere, Markdown și aplică dicționarul fonetic doar pe cuvinte întregi."""
+    """
+    Păstrează intacte cuvintele și cratimele românești ('m-am', 'într-o', 's-a')
+    și adaptează fonetic doar cuvintele englezești izolate din pronuntie_ro.json.
+    """
     if not text:
         return ""
 
-    # Eliminăm tag-uri reziduale și simboluri Markdown/emoji
-    text_curat = re.sub(r"^\s*\[[^\]]+\]\s*", "", text)
+    # 1. Normalizare Unicode NFC (împiedică ruperea diacriticelor românești)
+    text_curat = unicodedata.normalize("NFC", text)
+
+    # 2. Unificăm diacriticele cu sedilă la cele standard cu virgulă
+    text_curat = (
+        text_curat.replace("ş", "ș").replace("Ş", "Ș")
+        .replace("ţ", "ț").replace("Ţ", "Ț")
+    )
+
+    # 3. Convertim orice cratimă/linie Unicode în '-' standard ca 'într-o', 'm-am' să nu fie rupte!
+    text_curat = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2212]", "-", text_curat)
+
+    # 4. Eliminăm doar tag-ul de acțiune și simbolurile Markdown
+    text_curat = re.sub(r"^\s*\[[^\]]+\]\s*", "", text_curat)
     text_curat = re.sub(r"[\*\#\_\`\~]", "", text_curat)
-    text_curat = re.sub(r"[^\w\s.,!?:;ăâîșțĂÂÎȘȚ\-°%/]", " ", text_curat)
 
     if limba == "ro":
         for regex_abrev, inlocuire in _ABREVIERI_RO:
             text_curat = regex_abrev.sub(inlocuire, text_curat)
 
+        # Aplicăm dicționarul DOAR pe cuvinte întregi care NU au cratimă lângă ele
         for eng, fonetic_ro in _PERECHI_PRONUNTIE:
-            pattern = re.compile(rf"\b{re.escape(eng)}\b", re.IGNORECASE)
+            pattern = re.compile(rf"(?<!-)\b{re.escape(eng)}\b(?!-)", re.IGNORECASE)
             text_curat = pattern.sub(fonetic_ro, text_curat)
 
     return re.sub(r"\s+", " ", text_curat).strip()
 
 
-async def _descarca_bytes_audio(text, voce):
-    """Descarcă fluxul MP3 direct în memorie (RAM) pentru pre-fetching fără fișiere pe disc."""
+async def _genereaza_fisier_async(text, voce, cale_fisier):
     communicate = edge_tts.Communicate(text, voice=voce, rate=VITEZA_VOCE)
-    buffer_ram = bytearray()
-    async for chunk in communicate.stream():
-        if chunk["type"] == "audio":
-            buffer_ram.extend(chunk["data"])
-    return bytes(buffer_ram)
+    await communicate.save(cale_fisier)
 
 
-async def _stream_direct_in_boxe_linux(text, voce, t_referinta=None):
-    """Trimite pachetele audio direct în mpg123 în timp real."""
-    communicate = edge_tts.Communicate(text, voice=voce, rate=VITEZA_VOCE)
-    proces_player = subprocess.Popen(
-        ["mpg123", "-q", "-"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL
-    )
-    primul_sunet = False
-    try:
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio" and proces_player.stdin:
-                if not primul_sunet and t_referinta is not None and DEBUG:
-                    print(f"[TIMPI DEBUG]: Primul sunet TTS={time.perf_counter() - t_referinta:.2f}s")
-                    primul_sunet = True
-                proces_player.stdin.write(chunk["data"])
-                proces_player.stdin.flush()
-    finally:
-        if proces_player.stdin:
-            proces_player.stdin.close()
-        proces_player.wait()
-
-
-def _reda_bytes_audio(audio_bytes):
-    """Redă bytes MP3 direct din memorie prin mpg123 (Linux) sau pygame.mixer (Windows)."""
+def _reda_fisier_audio(cale_fisier):
     global _MIXER_INITIALIZAT
-    if not audio_bytes:
-        return
 
     if os.name != "nt" and shutil.which("mpg123"):
         subprocess.run(
-            ["mpg123", "-q", "-"],
-            input=audio_bytes,
+            ["mpg123", "-q", cale_fisier],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
@@ -121,84 +104,40 @@ def _reda_bytes_audio(audio_bytes):
         pygame.mixer.init(frequency=24000, buffer=1024)
         _MIXER_INITIALIZAT = True
 
-    flux_memorie = io.BytesIO(audio_bytes)
-    pygame.mixer.music.load(flux_memorie, "mp3")
+    pygame.mixer.music.load(cale_fisier)
     pygame.mixer.music.play()
     while pygame.mixer.music.get_busy():
-        time.sleep(0.02)
+        time.sleep(0.03)
     pygame.mixer.music.unload()
 
 
-class StreamVorbeste:
-    """
-    Pipeline paralel Propoziții LLM -> Pre-fetch TTS în RAM -> Redare fără pauze între propoziții.
-    """
-    def __init__(self, limba="ro", t_referinta=None):
-        self.limba = limba
-        self.voce = VOCE_RO if limba == "ro" else VOCE_EN
-        self.t_referinta = t_referinta
-        self.coada_texte = queue.Queue()
-        self.coada_audio = queue.Queue()
-        self.primul_trimis = False
-        self._t_fetch = threading.Thread(target=self._worker_prefetch, daemon=True)
-        self._t_play = threading.Thread(target=self._worker_redare, daemon=True)
-        self._t_fetch.start()
-        self._t_play.start()
-
-    def adauga_propozitie(self, propozitie):
-        text_adaptat = _curata_si_adapteaza_text(propozitie, self.limba)
-        if text_adaptat:
-            self.coada_texte.put(text_adaptat)
-
-    def _worker_prefetch(self):
-        while True:
-            text = self.coada_texte.get()
-            if text is None:
-                self.coada_audio.put(None)
-                break
-            try:
-                # Pe Linux prima propoziție face pipe direct în mpg123 pentru latență minimă (~0.3s)
-                if not self.primul_trimis and os.name != "nt" and shutil.which("mpg123"):
-                    self.primul_trimis = True
-                    self.coada_audio.put(("DIRECT_STREAM", text))
-                else:
-                    self.primul_trimis = True
-                    audio_bytes = asyncio.run(_descarca_bytes_audio(text, self.voce))
-                    self.coada_audio.put(("BYTES", audio_bytes))
-            except Exception as e:
-                print(f"[EROARE PREFETCH TTS]: {e}")
-
-    def _worker_redare(self):
-        primul_redat = False
-        while True:
-            element = self.coada_audio.get()
-            if element is None:
-                break
-            tip, payload = element
-            try:
-                if tip == "DIRECT_STREAM":
-                    asyncio.run(_stream_direct_in_boxe_linux(payload, self.voce, self.t_referinta))
-                    primul_redat = True
-                elif tip == "BYTES" and payload:
-                    if not primul_redat and self.t_referinta is not None and DEBUG:
-                        print(f"[TIMPI DEBUG]: Primul sunet TTS={time.perf_counter() - self.t_referinta:.2f}s")
-                        primul_redat = True
-                    _reda_bytes_audio(payload)
-            except Exception as e:
-                print(f"[EROARE REDARE TTS]: {e}")
-
-    def asteapta_finalizarea(self):
-        self.coada_texte.put(None)
-        self._t_fetch.join()
-        self._t_play.join()
-
-
 def vorbeste(text, limba="ro"):
-    """Funcție directă pentru rostirea unui text complet (compatibilă 100% cu apelurile existente)."""
-    stream_tts = StreamVorbeste(limba=limba, t_referinta=time.perf_counter())
-    stream_tts.adauga_propozitie(text)
-    stream_tts.asteapta_finalizarea()
+    """
+    Sintetizează răspunsul întreg în /dev/shm (RAM) și îl redă fluent,
+    fără pauze între propoziții și fără silabe înghițite.
+    """
+    t0 = time.perf_counter()
+    text_adaptat = _curata_si_adapteaza_text(text, limba=limba)
+    if not text_adaptat:
+        return
+
+    voce = VOCE_RO if limba == "ro" else VOCE_EN
+    cale_temp = _obtine_cale_audio_temp()
+
+    try:
+        asyncio.run(_genereaza_fisier_async(text_adaptat, voce, cale_temp))
+        if DEBUG:
+            print(f"[TIMPI DEBUG]: Sinteză TTS gata în {time.perf_counter() - t0:.2f}s -> Redau în boxe...")
+        _reda_fisier_audio(cale_temp)
+    except Exception as e:
+        print(f"[EROARE VOCE]: Nu am putut reda sunetul ({e})")
+    finally:
+        try:
+            if os.path.exists(cale_temp):
+                os.remove(cale_temp)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
-    vorbeste("Salut! Totul merge impecabil la 22°C în Timișoara, iar folderul voice este optimizat!", limba="ro")
+    vorbeste("Salut! M-am trezit într-o formă excelentă pe Raspberry Pi și acum vorbesc din nou clar și natural!", limba="ro")

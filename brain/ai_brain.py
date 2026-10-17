@@ -80,34 +80,28 @@ def _detecteaza_oras_rapid(text):
 
 def _deschide_stream_model(model_curent, continut_apel, temperatura):
     """
-    Încearcă deschiderea stream-ului cu thinking_budget=0 (pentru latență minimă).
-    Dacă modelul respectiv nu suportă parametrul thinking_config, reîncearcă instant fără el.
+    Modelele 'lite' nu folosesc thinking_config (evită eroarea 400 INVALID_ARGUMENT),
+    iar pe modelele flash standard dezactivăm thinking-ul cu thinking_budget=0.
     """
-    try:
-        cfg_rapid = types.GenerateContentConfig(
+    if "lite" in model_curent:
+        cfg = types.GenerateContentConfig(
+            system_instruction=instructiuni_sistem,
+            temperature=temperatura,
+            max_output_tokens=280
+        )
+    else:
+        cfg = types.GenerateContentConfig(
             system_instruction=instructiuni_sistem,
             temperature=temperatura,
             max_output_tokens=280,
             thinking_config=types.ThinkingConfig(thinking_budget=0)
         )
-        return client.models.generate_content_stream(
-            model=model_curent,
-            contents=continut_apel,
-            config=cfg_rapid
-        )
-    except Exception as e:
-        if "thinking" in str(e).lower() or "400" in str(e):
-            cfg_standard = types.GenerateContentConfig(
-                system_instruction=instructiuni_sistem,
-                temperature=temperatura,
-                max_output_tokens=280
-            )
-            return client.models.generate_content_stream(
-                model=model_curent,
-                contents=continut_apel,
-                config=cfg_standard
-            )
-        raise
+    return client.models.generate_content_stream(
+        model=model_curent,
+        contents=continut_apel,
+        config=cfg
+    )
+ 
 
 
 def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on_text_chunk=None, on_propozitie=None):
@@ -275,7 +269,7 @@ def genereaza_salut_pornire(limba="ro", on_text_chunk=None, on_propozitie=None):
 
     return _stream_de_la_gemini(
         prompt_salut,
-        temperatura=0.9,
+        temperatura=0.75,
         salveaza_istoric=True,
         on_text_chunk=on_text_chunk,
         on_propozitie=on_propozitie

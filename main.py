@@ -16,6 +16,8 @@ class RobotCompanionUI:
 
         # --- SECRETUL PENTRU KIOSK MODE PERFECT ---
         self.root.overrideredirect(True)
+        self.root.attributes("-topmost", True)
+        self.root.lift()
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         self.root.geometry(f"{screen_width}x{screen_height}+0+0")

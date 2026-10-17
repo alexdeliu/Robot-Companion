@@ -74,8 +74,8 @@ def preincalzeste_microfon():
             with source:
                 recognizer.adjust_for_ambient_noise(source, duration=0.4)
                 zgomot_ambiant = recognizer.energy_threshold
-                # Punem pragul cu 35% peste zgomotul de fond (între 300 și 900)
-                recognizer.energy_threshold = max(300, min(900, int(zgomot_ambiant * 1.35)))
+                # Prag cu 25% PESTE zgomotul real al camerei (ex: 1174 -> ~1467), plafon până la 3500
+                recognizer.energy_threshold = max(300, min(3500, int(zgomot_ambiant * 1.25)))
                 _CALIBRAT_INITIAL = True
         if DEBUG:
             print(
@@ -172,7 +172,7 @@ def asculta_voce(on_status=None):
                 if not _CALIBRAT_INITIAL:
                     recognizer.adjust_for_ambient_noise(source, duration=0.35)
                     zgomot = recognizer.energy_threshold
-                    recognizer.energy_threshold = max(300, min(900, int(zgomot * 1.35)))
+                    recognizer.energy_threshold = max(300, min(3500, int(zgomot * 1.25)))
                     _CALIBRAT_INITIAL = True
 
                 if on_status:

@@ -14,10 +14,10 @@ load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY")
 DEBUG = os.getenv("DEBUG", "1") == "1"
 
-# Client cu timeout explicit (8000 ms = 8s)
+# Minimum acceptat de serverele Google Gemini este 10000 ms (10s); setăm 15000 ms (15s)
 client = genai.Client(
     api_key=API_KEY,
-    http_options=types.HttpOptions(timeout=8000)
+    http_options=types.HttpOptions(timeout=15000)
 )
 
 # Modelele reale disponibile în contul tău (verificate cu search_aimodels.py)

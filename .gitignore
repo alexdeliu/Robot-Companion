@@ -182,3 +182,4 @@ cython_debug/
 __pycache__/venv/
 *.wav
 __pycache__/
+ears/model_ro/

@@ -9,43 +9,87 @@ from google.genai import types
 from dotenv import load_dotenv
 
 from brain.abilities.weather import get_weather
+from brain.abilities.wikipedia_ro import cauta_wikipedia, continua_wikipedia
+from brain.abilities.youtube_player import (
+    cauta_youtube_oficial,
+    reda_rezultat_dupa_numar,
+    inchide_overlay_youtube,
+    piesa_urmatoare,
+    piesa_anterioara,
+    seteaza_volum_sistem,
+    schimba_volum_relativ
+)
 
 load_dotenv()
 API_KEY = os.getenv("GEMINI_API_KEY")
 DEBUG = os.getenv("DEBUG", "1") == "1"
 
-# Minimum acceptat de serverele Google Gemini este 10000 ms (10s); setăm 15000 ms (15s)
 client = genai.Client(
     api_key=API_KEY,
     http_options=types.HttpOptions(timeout=15000)
 )
 
-# Modelele reale disponibile în contul tău (verificate cu search_aimodels.py)
-MODEL_PRINCIPAL = "gemini-3.5-flash-lite"
+MODEL_PRINCIPAL = "gemini-3.5-flash"
 MODELE_REZERVA = [
-    "gemini-3.5-flash",
     "gemini-3.8-flash",
+    "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
-    "gemini-flash-lite-latest"
+    "gemini-flash-latest"
 ]
 
 instructiuni_sistem = """Ești "Creierul" unui robot companion fizic de birou din Timișoara. Ești prietenos, inteligent, spontan și uneori puțin sarcastic sau glumeț.
-Reguli:
-1. Răspunde SCURT și natural (1-3 propoziții), în limba română, scris corect ortografic (cu diacritice). NU transcrie cuvintele fonetic.
-2. Înțelegi româna și engleza. Dedu intenția logică dacă transcrierea vocală are mici erori.
-3. Începe răspunsul cu UN SINGUR tag între paranteze drepte, urmat imediat de textul vorbit:
-   - Pentru conversație normală: [vorbeste_normal] Răspunsul tău...
-   - Pentru o glumă: [spune_gluma] Răspunsul tău...
-   - Pentru vreme (doar dacă NU ai deja [DATE METEO] în mesaj): [arata_vreme:Oraș]
-   - Pentru YouTube video: [reda_youtube:căutare] Răspunsul tău...
-   - Pentru muzică: [reda_muzica:melodie] Răspunsul tău..."""
+
+REGULI CRITICE DE LIMBĂ ȘI ORTOGRAFIE:
+1. Răspunde SCURT, cursiv și natural (1-3 propoziții), în limba română literară impecabilă, cu diacritice corecte (ă, â, î, ș, ț).
+2. INTERZIS să inventezi cuvinte, să pocești cuvintele în scris sau să transcrii fonetic cuvintele! Scrie toate cuvintele 100% corect ortografic.
+3. Înțelegi perfect româna și engleza, dar răspunzi MEREU în limba română.
+4. Începe răspunsul cu UN SINGUR tag de acțiune între paranteze drepte, urmat de textul vorbit:
+   - Conversație normală: [vorbeste_normal] Răspunsul tău...
+   - Glumă: [spune_gluma] Răspunsul tău...
+   - Vreme (dacă nu ai deja [DATE METEO]): [arata_vreme:Oraș]
+   - Wikipedia / enciclopedie / cine a fost / ce este: [cauta_wikipedia:Subiect]
+   - Continuare articol Wikipedia ("spune-mi mai mult"): [continua_wikipedia]
+   - Căutare videoclip YouTube: [reda_youtube:termen căutat] Răspuns scurt...
+   - Redare muzică / melodie YouTube Music: [reda_muzica:artist sau melodie] Răspuns scurt...
+   - Oprire muzică sau videoclip: [opreste_media] Am oprit redarea."""
 
 istoric_conversatie = []
 _istoric_lock = threading.Lock()
 
+ZILE_SAPTAMANA_RO = [
+    "luni", "marți", "miercuri", "joi", "vineri", "sâmbătă", "duminică"
+]
+LUNI_AN_RO = [
+    "", "ianuarie", "februarie", "martie", "aprilie", "mai", "iunie",
+    "iulie", "august", "septembrie", "octombrie", "noiembrie", "decembrie"
+]
+
 CUVINTE_CHEIE_METEO = re.compile(
     r"\b(vreme\w*|plou\w*|ploai\w*|ninge|ninso\w*|grade|cald|frig|ger|soare|înnorat|innorat|"
     r"furtun\w*|vânt\w*|vant\w*|ceață|ceata|prognoz\w*|meteo|weather|rain\w*|snow\w*|sunny|forecast)\b",
+    re.IGNORECASE
+)
+
+CUVINTE_MAI_MULT_WIKI = re.compile(
+    r"\b(spune-mi mai mult|spune mai mult|mai departe|continuă|continua articolul|detaliază|mai multe detalii)\b",
+    re.IGNORECASE
+)
+
+CUVINTE_ORA_DATA = re.compile(
+    r"\b(cât e ceasul|cat e ceasul|ce oră e|ce ora e|ce oră este|în ce dată suntem|in ce data suntem|ce zi e azi|ce zi este azi)\b",
+    re.IGNORECASE
+)
+
+CUVINTE_SELECTIE_YT = {
+    "primul": 1, "prima": 1, "unu": 1, "numărul 1": 1, "numarul 1": 1, "varianta 1": 1,
+    "al doilea": 2, "a doua": 2, "doi": 2, "numărul 2": 2, "numarul 2": 2, "varianta 2": 2,
+    "al treilea": 3, "a treia": 3, "trei": 3, "numărul 3": 3, "numarul 3": 3, "varianta 3": 3,
+    "al patrulea": 4, "a patra": 4, "patru": 4, "numărul 4": 4, "numarul 4": 4, "varianta 4": 4,
+    "al cincilea": 5, "a cincea": 5, "cinci": 5, "numărul 5": 5, "numarul 5": 5, "varianta 5": 5,
+}
+
+CUVINTE_OPRIRE_MEDIA = re.compile(
+    r"\b(oprește muzica|opreste muzica|oprește videoclipul|opreste video|închide youtube|inchide youtube|stop youtube|oprește youtube|oprește-te|taci)\b",
     re.IGNORECASE
 )
 
@@ -61,8 +105,13 @@ CUVINTE_EXCLUSE_ORAS = {
     "afară", "afara", "oraș", "oras", "camera", "cameră", "zile", "săptămâna"
 }
 
-_REGEX_TAG = re.compile(r"^\s*\[([a-z_]+)(?::([^\]]*))?\]\s*", re.IGNORECASE)
-_REGEX_SPLIT_PROPOZITIE = re.compile(r"(?<=[.!?])\s+")
+_REGEX_TAG = re.compile(r"^\s*\[([^\]:]+)(?::([^\]]*))?\]\s*", re.IGNORECASE)
+
+
+def reseteaza_memorie_ai():
+    global istoric_conversatie
+    with _istoric_lock:
+        istoric_conversatie.clear()
 
 
 def _detecteaza_oras_rapid(text):
@@ -79,10 +128,6 @@ def _detecteaza_oras_rapid(text):
 
 
 def _deschide_stream_model(model_curent, continut_apel, temperatura):
-    """
-    Modelele 'lite' nu folosesc thinking_config (evită eroarea 400 INVALID_ARGUMENT),
-    iar pe modelele flash standard dezactivăm thinking-ul cu thinking_budget=0.
-    """
     if "lite" in model_curent:
         cfg = types.GenerateContentConfig(
             system_instruction=instructiuni_sistem,
@@ -101,23 +146,18 @@ def _deschide_stream_model(model_curent, continut_apel, temperatura):
         contents=continut_apel,
         config=cfg
     )
- 
 
 
-def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on_text_chunk=None, on_propozitie=None):
-    """
-    Streaming LLM cu modelele 3.5 / 3.8, fallback automat la 503/timeout
-    și trimitere simultană către UI (on_text_chunk) și TTS (on_propozitie).
-    """
+def _stream_de_la_gemini(prompt_text, temperatura=0.45, salveaza_istoric=True, text_istoric_user=None, on_text_chunk=None):
     global istoric_conversatie
     t0 = time.perf_counter()
 
-    mesaj_user = types.Content(
+    mesaj_user_apel = types.Content(
         role="user",
         parts=[types.Part.from_text(text=prompt_text)]
     )
     with _istoric_lock:
-        continut_apel = list(istoric_conversatie) + [mesaj_user]
+        continut_apel = list(istoric_conversatie) + [mesaj_user_apel]
 
     toate_modelele = [MODEL_PRINCIPAL] + MODELE_REZERVA
 
@@ -125,7 +165,6 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on
         try:
             t_first_token = None
             buffer_complet = ""
-            buffer_propozitii = ""
             tag_parsat = False
             actiune = "vorbeste_normal"
             parametru = ""
@@ -143,50 +182,36 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on
                 buffer_complet += bucata
 
                 if not tag_parsat:
-                    if "]" in buffer_complet or len(buffer_complet) > 35:
+                    if "]" in buffer_complet or len(buffer_complet) > 40:
                         m = _REGEX_TAG.match(buffer_complet)
                         if m:
-                            actiune = m.group(1).lower()
+                            actiune = m.group(1).strip().lower()
                             parametru = (m.group(2) or "").strip()
                             rest = buffer_complet[m.end():]
                         else:
                             rest = buffer_complet.lstrip()
                         tag_parsat = True
-                        if actiune == "arata_vreme" and not rest:
+                        if actiune in ("arata_vreme", "cauta_wikipedia", "continua_wikipedia") and not rest:
                             break
                         if rest:
                             text_afisat += rest
-                            buffer_propozitii += rest
                             if on_text_chunk:
                                 on_text_chunk(rest)
                 else:
                     text_afisat += bucata
-                    buffer_propozitii += bucata
                     if on_text_chunk:
                         on_text_chunk(bucata)
-
-                if tag_parsat and on_propozitie and actiune != "arata_vreme":
-                    parti = _REGEX_SPLIT_PROPOZITIE.split(buffer_propozitii)
-                    if len(parti) > 1:
-                        for prop in parti[:-1]:
-                            if prop.strip():
-                                on_propozitie(prop.strip())
-                        buffer_propozitii = parti[-1]
 
             if not tag_parsat and buffer_complet.strip():
                 m = _REGEX_TAG.match(buffer_complet)
                 if m:
-                    actiune = m.group(1).lower()
+                    actiune = m.group(1).strip().lower()
                     parametru = (m.group(2) or "").strip()
                     text_afisat = buffer_complet[m.end():].strip()
                 else:
                     text_afisat = buffer_complet.strip()
-                if text_afisat and on_text_chunk:
+                if text_afisat and on_text_chunk and actiune not in ("arata_vreme", "cauta_wikipedia"):
                     on_text_chunk(text_afisat)
-                buffer_propozitii = text_afisat
-
-            if on_propozitie and buffer_propozitii.strip() and actiune != "arata_vreme":
-                on_propozitie(buffer_propozitii.strip())
 
             t_total = time.perf_counter() - t0
             if DEBUG:
@@ -195,13 +220,13 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on
 
             text_final = text_afisat.strip()
             if salveaza_istoric and text_final:
+                text_pt_istoric = text_istoric_user or prompt_text
                 with _istoric_lock:
-                    istoric_conversatie.append(mesaj_user)
                     istoric_conversatie.append(
-                        types.Content(
-                            role="model",
-                            parts=[types.Part.from_text(text=f"[{actiune}] {text_final}")]
-                        )
+                        types.Content(role="user", parts=[types.Part.from_text(text=text_pt_istoric)])
+                    )
+                    istoric_conversatie.append(
+                        types.Content(role="model", parts=[types.Part.from_text(text=f"[{actiune}] {text_final}")])
                     )
                     if len(istoric_conversatie) > 8:
                         istoric_conversatie = istoric_conversatie[-8:]
@@ -217,16 +242,13 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.7, salveaza_istoric=True, on
                 print(f"[FALLBACK AI]: {model_curent} a eșuat ({e}). Trec imediat pe următorul model...")
             continue
 
-    aglom = "Serverele mele sunt cam aglomerate în clipa asta. Mai încearcă în câteva secunde!"
+    aglom = "Conexiunea cu serverele este aglomerată în această clipă. Mai încearcă o dată!"
     if on_text_chunk:
         on_text_chunk(aglom)
-    if on_propozitie:
-        on_propozitie(aglom)
     return {"actiune": "eroare", "parametru": "", "mesaj": aglom}
 
 
 def genereaza_salut_pornire(limba="ro", on_text_chunk=None, on_propozitie=None):
-    """100% AI Dinamic cu streaming direct la pornire."""
     acum = datetime.now()
     ora_str = acum.strftime("%H:%M")
     ora = acum.hour
@@ -242,37 +264,26 @@ def genereaza_salut_pornire(limba="ro", on_text_chunk=None, on_propozitie=None):
 
     stari_personalitate = [
         "glumeț, autoironic și plin de viață",
-        "morocănos și amuzant-nervos că tocmai ai fost trezit din somnul digital",
-        "sarcastic și șmecher, ca un coleg de cameră din Timișoara",
-        "exagerat de politicos și teatral, ca un majordom regal",
-        "plictisit și filozofic, comentând amuzant despre viața într-o cutie de Raspberry Pi",
-        "super entuziasmat și curios să afle ce punem la cale azi",
-        "puțin suspicios în glumă, întrebându-se de ce l-ai pornit la ora asta"
-    ]
-
-    teme_creative = [
-        f"fă o remarcă scurtă și originală legată de faptul că e {moment_zi} (ora {ora_str})",
-        "fă o glumă scurtă despre circuitele tale, curentul electric sau microfonul tău",
-        "întreabă utilizatorul într-un mod original și neașteptat ce misiune are pentru tine",
-        "comentează amuzant despre faptul că ești gata de vorbă pe biroul din Timișoara"
+        "morocănos în glumă că tocmai ai fost trezit din somnul digital",
+        "sarcastic și simpatic, ca un prieten bun din Timișoara",
+        "exagerat de politicos, ca un majordom britanic",
+        "super entuziasmat și curios să afle ce facem astăzi"
     ]
 
     stare_aleasa = random.choice(stari_personalitate)
-    tema_aleasa = random.choice(teme_creative)
     seed_unic = random.randint(1000, 9999)
 
     prompt_salut = (
         f"[SISTEM - PORNIRE #{seed_unic}] Tocmai ai fost pornit la ora {ora_str} ({moment_zi}). "
-        f"Starea ta: {stare_aleasa}. În maxim 2 propoziții scurte, {tema_aleasa}. "
-        f"Începe cu [vorbeste_normal]."
+        f"Starea ta este: {stare_aleasa}. Salută utilizatorul în maxim 2 propoziții scurte și naturale, "
+        f"scrise în limba română literară perfectă. Începe cu [vorbeste_normal]."
     )
 
     return _stream_de_la_gemini(
         prompt_salut,
-        temperatura=0.75,
-        salveaza_istoric=True,
-        on_text_chunk=on_text_chunk,
-        on_propozitie=on_propozitie
+        temperatura=0.5,
+        salveaza_istoric=False,
+        on_text_chunk=on_text_chunk
     )
 
 
@@ -280,35 +291,106 @@ genereaza_mesaj_bun_venit = genereaza_salut_pornire
 
 
 def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=None):
-    """Procesează comanda cu Streaming în UI și TTS."""
-    if CUVINTE_CHEIE_METEO.search(text):
-        oras_detectat = _detecteaza_oras_rapid(text)
+    text_curat = text.strip()
+    text_mic = text_curat.lower()
+
+    # 1. QoL: Răspuns instantaneu la Oră și Dată (0.0s latență!)
+    if CUVINTE_ORA_DATA.search(text_mic):
+        acum = datetime.now()
+        zi_nume = ZILE_SAPTAMANA_RO[acum.weekday()]
+        luna_nume = LUNI_AN_RO[acum.month]
+        msg = f"Este ora {acum.hour} și {acum.minute:02d} minute. Astăzi este {zi_nume}, {acum.day} {luna_nume} {acum.year}."
+        if on_text_chunk:
+            on_text_chunk(msg)
+        return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg}
+
+    # 2. QoL: Reglare Volum prin Comandă Vocală (0.0s latență!)
+    if any(k in text_mic for k in ("dă mai tare", "da mai tare", "volum mai mare", "volum maxim", "volumul la maxim")):
+        vol = seteaza_volum_sistem(100) if "maxim" in text_mic else schimba_volum_relativ(15)
+        msg = f"Am ridicat volumul la {vol}%."
+        if on_text_chunk:
+            on_text_chunk(msg)
+        return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg}
+
+    if any(k in text_mic for k in ("dă mai încet", "da mai incet", "volum mai mic", "mai încet")):
+        vol = schimba_volum_relativ(-20)
+        msg = f"Am redus volumul la {vol}%."
+        if on_text_chunk:
+            on_text_chunk(msg)
+        return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg}
+
+    # 3. Comenzi rapide de control media (0.0s latență!)
+    if CUVINTE_OPRIRE_MEDIA.search(text_mic):
+        inchide_overlay_youtube()
+        msg = "Am oprit redarea."
+        if on_text_chunk:
+            on_text_chunk(msg)
+        return {"actiune": "opreste_media", "parametru": "", "mesaj": msg}
+
+    for expresie, nr in CUVINTE_SELECTIE_YT.items():
+        if re.search(rf"\b{re.escape(expresie)}\b", text_mic) and len(text_mic.split()) <= 5:
+            ales = reda_rezultat_dupa_numar(nr)
+            if ales:
+                msg = f"Redau acum opțiunea {nr}: {ales['titlu']}."
+                if on_text_chunk:
+                    on_text_chunk(msg)
+                return {"actiune": "selecteaza_youtube", "parametru": str(nr), "mesaj": msg, "date_ui": ales}
+
+    if any(k in text_mic for k in ("următoarea melodie", "urmatoarea melodie", "piesa următoare", "next song")):
+        ales = piesa_urmatoare()
+        if ales:
+            msg = f"Trec la următoarea piesă: {ales['titlu']}."
+            if on_text_chunk:
+                on_text_chunk(msg)
+            return {"actiune": "reda_muzica", "parametru": ales["titlu"], "mesaj": msg, "date_ui": ales}
+
+    if any(k in text_mic for k in ("melodia anterioară", "piesa anterioară", "previous song")):
+        ales = piesa_anterioara()
+        if ales:
+            msg = f"Revin la piesa anterioară: {ales['titlu']}."
+            if on_text_chunk:
+                on_text_chunk(msg)
+            return {"actiune": "reda_muzica", "parametru": ales["titlu"], "mesaj": msg, "date_ui": ales}
+
+    # 4. Continuare articol Wikipedia ("Spune-mi mai mult")
+    if CUVINTE_MAI_MULT_WIKI.search(text_mic):
+        continuare = continua_wikipedia()
+        if on_text_chunk:
+            on_text_chunk(continuare)
+        return {"actiune": "continua_wikipedia", "parametru": "", "mesaj": continuare}
+
+    # 5. One-Shot Weather
+    if CUVINTE_CHEIE_METEO.search(text_curat):
+        oras_detectat = _detecteaza_oras_rapid(text_curat)
         raport_date = get_weather(oras_detectat)
         prompt_direct = (
-            f"Utilizatorul a întrebat: \"{text}\"\n"
+            f"Utilizatorul a întrebat: \"{text_curat}\"\n"
             f"[DATE METEO REALE PENTRU {oras_detectat.upper()}]:\n{raport_date}\n"
             f"Răspunde direct și natural în 1-3 propoziții scurte, cu personalitatea ta! Începe cu [vorbeste_normal]."
         )
         rez = _stream_de_la_gemini(
             prompt_direct,
-            temperatura=0.7,
+            temperatura=0.45,
             salveaza_istoric=True,
-            on_text_chunk=on_text_chunk,
-            on_propozitie=on_propozitie
+            text_istoric_user=text_curat,
+            on_text_chunk=on_text_chunk
         )
         rez["actiune"] = "arata_vreme"
         return rez
 
+    # 6. Apelul principal către Gemini
     raspuns_robot = _stream_de_la_gemini(
-        text,
-        temperatura=0.75,
+        text_curat,
+        temperatura=0.45,
         salveaza_istoric=True,
-        on_text_chunk=on_text_chunk,
-        on_propozitie=on_propozitie
+        text_istoric_user=text_curat,
+        on_text_chunk=on_text_chunk
     )
+    actiune = raspuns_robot.get("actiune", "vorbeste_normal")
+    parametru = raspuns_robot.get("parametru", "").strip()
 
-    if raspuns_robot.get("actiune") == "arata_vreme":
-        oras_tinta = raspuns_robot.get("parametru") or "Timișoara"
+    if actiune == "arata_vreme":
+        oras_tinta = parametru or "Timișoara"
         raport_date = get_weather(oras_tinta)
         prompt_ascuns = (
             f"[DATE METEO PENTRU {oras_tinta}]:\n{raport_date}\n"
@@ -316,12 +398,79 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
         )
         raspuns_final = _stream_de_la_gemini(
             prompt_ascuns,
-            temperatura=0.7,
+            temperatura=0.45,
             salveaza_istoric=True,
-            on_text_chunk=on_text_chunk,
-            on_propozitie=on_propozitie
+            text_istoric_user=text_curat,
+            on_text_chunk=on_text_chunk
         )
         raspuns_final["actiune"] = "arata_vreme"
         return raspuns_final
+
+    if actiune == "cauta_wikipedia":
+        subiect = parametru or text_curat
+        info_wiki = cauta_wikipedia(subiect, limba=limba)
+        if "eroare" in info_wiki:
+            msg_err = info_wiki["eroare"]
+            if on_text_chunk and not raspuns_robot.get("mesaj"):
+                on_text_chunk(msg_err)
+            return {"actiune": "vorbeste_normal", "parametru": subiect, "mesaj": msg_err}
+
+        rezumat_wiki = info_wiki["rezumat"]
+        if on_text_chunk and not raspuns_robot.get("mesaj"):
+            on_text_chunk(rezumat_wiki)
+        return {
+            "actiune": "cauta_wikipedia",
+            "parametru": info_wiki["titlu"],
+            "mesaj": rezumat_wiki,
+            "date_ui": info_wiki
+        }
+
+    if actiune == "reda_youtube":
+        cautare = parametru or text_curat
+        rezultate = cauta_youtube_oficial(cautare, doar_muzica=False, max_rezultate=5)
+        if not rezultate:
+            msg = f"Nu am putut găsi videoclipuri pe YouTube pentru {cautare}."
+            if on_text_chunk and not raspuns_robot.get("mesaj"):
+                on_text_chunk(msg)
+            return {"actiune": "vorbeste_normal", "parametru": cautare, "mesaj": msg}
+
+        t1 = rezultate[0]["titlu"]
+        t2 = rezultate[1]["titlu"] if len(rezultate) > 1 else ""
+        msg_lista = (
+            f"Am găsit 5 rezultate pe YouTube pentru {cautare}. "
+            f"Primul este {t1}" + (f", iar al doilea este {t2}. " if t2 else ". ") +
+            "Spune-mi numărul dorit sau apasă pe ecran!"
+        )
+        if not raspuns_robot.get("mesaj") and on_text_chunk:
+            on_text_chunk(msg_lista)
+        return {
+            "actiune": "reda_youtube",
+            "parametru": cautare,
+            "mesaj": msg_lista,
+            "date_ui": rezultate
+        }
+
+    if actiune == "reda_muzica":
+        cautare = parametru or text_curat
+        rezultate = cauta_youtube_oficial(cautare, doar_muzica=True, max_rezultate=5)
+        if not rezultate:
+            msg = f"Nu am găsit melodia {cautare} pe YouTube Music."
+            if on_text_chunk and not raspuns_robot.get("mesaj"):
+                on_text_chunk(msg)
+            return {"actiune": "vorbeste_normal", "parametru": cautare, "mesaj": msg}
+
+        prima_piesa = rezultate[0]
+        msg_muzica = raspuns_robot.get("mesaj") or f"Redau acum {prima_piesa['titlu']} de la {prima_piesa['canal']}."
+        if not raspuns_robot.get("mesaj") and on_text_chunk:
+            on_text_chunk(msg_muzica)
+        return {
+            "actiune": "reda_muzica",
+            "parametru": cautare,
+            "mesaj": msg_muzica,
+            "date_ui": prima_piesa
+        }
+
+    if actiune == "opreste_media":
+        inchide_overlay_youtube()
 
     return raspuns_robot

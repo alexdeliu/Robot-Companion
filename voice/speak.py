@@ -12,10 +12,27 @@ import edge_tts
 DEBUG = os.getenv("DEBUG", "1") == "1"
 VOCE_RO = os.getenv("TTS_VOICE_RO", "ro-RO-EmilNeural")
 VOCE_EN = os.getenv("TTS_VOICE_EN", "en-US-ChristopherNeural")
-VITEZA_VOCE = os.getenv("TTS_RATE", "+0%")
+VITEZA_VOCE = os.getenv("TTS_RATE", "+8%")
 
 _MIXER_INITIALIZAT = False
+_PROCES_CURENT_MPG123 = None
 _CALE_DICT = os.path.join(os.path.dirname(__file__), "pronuntie_ro.json")
+
+_DICT_IMPLICIT = {
+    "raspberry pi": "razberi pai",
+    "youtube music": "iutub miuzic",
+    "youtube": "iutub",
+    "wi-fi": "uaifai",
+    "wifi": "uaifai",
+    "bluetooth": "blutut",
+    "wireless": "uairles",
+    "folder": "foldăr",
+    "folderul": "foldărul",
+    "python": "paiton",
+    "google": "gugăl",
+    "gemini": "geminai",
+    "github": "ghithab"
+}
 
 
 def _incarca_dictionar():
@@ -24,7 +41,7 @@ def _incarca_dictionar():
             date = json.load(f)
         return sorted(date.items(), key=lambda x: len(x[0]), reverse=True)
     except Exception:
-        return []
+        return sorted(_DICT_IMPLICIT.items(), key=lambda x: len(x[0]), reverse=True)
 
 
 _PERECHI_PRONUNTIE = _incarca_dictionar()
@@ -40,7 +57,6 @@ _ABREVIERI_RO = [
 
 
 def _obtine_cale_audio_temp():
-    """Salvează în RAM (/dev/shm) pe Raspberry Pi pentru viteză maximă și zero uzură SD."""
     if os.path.isdir("/dev/shm"):
         return "/dev/shm/robot_tts.mp3"
     return os.path.join(tempfile.gettempdir(), "robot_tts.mp3")
@@ -48,25 +64,19 @@ def _obtine_cale_audio_temp():
 
 def _curata_si_adapteaza_text(text, limba="ro"):
     """
-    Păstrează intacte cuvintele și cratimele românești ('m-am', 'într-o', 's-a')
-    și adaptează fonetic doar cuvintele englezești izolate din pronuntie_ro.json.
+    Curăță simbolurile Markdown și păstrează 100% intacte cuvintele și cratimele românești,
+    exact ca în prima versiune, adaptând doar termenii tehnici englezești.
     """
     if not text:
         return ""
 
-    # 1. Normalizare Unicode NFC (împiedică ruperea diacriticelor românești)
     text_curat = unicodedata.normalize("NFC", text)
-
-    # 2. Unificăm diacriticele cu sedilă la cele standard cu virgulă
     text_curat = (
         text_curat.replace("ş", "ș").replace("Ş", "Ș")
         .replace("ţ", "ț").replace("Ţ", "Ț")
     )
-
-    # 3. Convertim orice cratimă/linie Unicode în '-' standard ca 'într-o', 'm-am' să nu fie rupte!
     text_curat = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2212]", "-", text_curat)
-
-    # 4. Eliminăm doar tag-ul de acțiune și simbolurile Markdown
+    text_curat = re.sub(r"\b([a-zăâîșțA-ZĂÂÎȘȚ]{1,3})\s*-\s*([a-zăâîșțA-ZĂÂÎȘȚ]+)\b", r"\1-\2", text_curat)
     text_curat = re.sub(r"^\s*\[[^\]]+\]\s*", "", text_curat)
     text_curat = re.sub(r"[\*\#\_\`\~]", "", text_curat)
 
@@ -74,9 +84,8 @@ def _curata_si_adapteaza_text(text, limba="ro"):
         for regex_abrev, inlocuire in _ABREVIERI_RO:
             text_curat = regex_abrev.sub(inlocuire, text_curat)
 
-        # Aplicăm dicționarul DOAR pe cuvinte întregi care NU au cratimă lângă ele
         for eng, fonetic_ro in _PERECHI_PRONUNTIE:
-            pattern = re.compile(rf"(?<!-)\b{re.escape(eng)}\b(?!-)", re.IGNORECASE)
+            pattern = re.compile(rf"(?<![\w\-]){re.escape(eng)}(?![\w\-])", re.IGNORECASE)
             text_curat = pattern.sub(fonetic_ro, text_curat)
 
     return re.sub(r"\s+", " ", text_curat).strip()
@@ -87,15 +96,33 @@ async def _genereaza_fisier_async(text, voce, cale_fisier):
     await communicate.save(cale_fisier)
 
 
+def opreste_voce():
+    """Oprește imediat redarea vocală curentă (Barge-In)."""
+    global _PROCES_CURENT_MPG123
+    if _PROCES_CURENT_MPG123 and _PROCES_CURENT_MPG123.poll() is None:
+        try:
+            _PROCES_CURENT_MPG123.terminate()
+        except Exception:
+            pass
+    if _MIXER_INITIALIZAT:
+        try:
+            import pygame
+            pygame.mixer.music.stop()
+        except Exception:
+            pass
+
+
 def _reda_fisier_audio(cale_fisier):
-    global _MIXER_INITIALIZAT
+    global _MIXER_INITIALIZAT, _PROCES_CURENT_MPG123
 
     if os.name != "nt" and shutil.which("mpg123"):
-        subprocess.run(
+        _PROCES_CURENT_MPG123 = subprocess.Popen(
             ["mpg123", "-q", cale_fisier],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
+        _PROCES_CURENT_MPG123.wait()
+        _PROCES_CURENT_MPG123 = None
         return
 
     os.environ["PYGAME_HIDE_SUPPORT_PROMPT"] = "1"
@@ -112,10 +139,6 @@ def _reda_fisier_audio(cale_fisier):
 
 
 def vorbeste(text, limba="ro"):
-    """
-    Sintetizează răspunsul întreg în /dev/shm (RAM) și îl redă fluent,
-    fără pauze între propoziții și fără silabe înghițite.
-    """
     t0 = time.perf_counter()
     text_adaptat = _curata_si_adapteaza_text(text, limba=limba)
     if not text_adaptat:
@@ -140,4 +163,4 @@ def vorbeste(text, limba="ro"):
 
 
 if __name__ == "__main__":
-    vorbeste("Salut! M-am trezit într-o formă excelentă pe Raspberry Pi și acum vorbesc din nou clar și natural!", limba="ro")
+    vorbeste("Salut! Acum vorbesc din nou clar, cursiv și natural în limba română, cu un plan bun pe ecran!", limba="ro")

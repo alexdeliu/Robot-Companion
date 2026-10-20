@@ -1,4 +1,6 @@
+import io
 import time
+import urllib.request
 from datetime import datetime
 import tkinter as tk
 from tkinter import scrolledtext
@@ -16,9 +18,12 @@ from brain.abilities.youtube_player import (
     reda_rezultat_dupa_numar,
     deschide_overlay_youtube,
     inchide_overlay_youtube,
+    toggle_pauza_media,
     piesa_urmatoare,
     piesa_anterioara,
     seteaza_volum_sistem,
+    atenueaza_volum_temporar,
+    restabileste_volum_normal,
     schimba_volum_relativ
 )
 
@@ -31,7 +36,14 @@ class RobotCompanionUI:
         self.ocupat = False
         self.wake_word_activ = True
         self.oprire_wake_event = threading.Event()
+        self.fir_wake_activ = False
         self.inchidere_aplicatie = False
+        self._img_referinta_ui = None
+        self._ultimul_cautare_yt = ""
+        self._ultimele_rezultate_yt = []
+
+        # Setăm volumul puternic (95% logaritmic) încă de la pornirea interfeței
+        seteaza_volum_sistem(95, salveaza_ca_normal=True)
 
         # --- SECRETUL PENTRU KIOSK MODE PERFECT ---
         self.root.overrideredirect(True)
@@ -130,6 +142,21 @@ class RobotCompanionUI:
             self.lbl_ceas.config(text=datetime.now().strftime("%H:%M"))
             self.root.after(15000, self._actualizeaza_ceas)
 
+    def _incarca_imagine_url(self, url, latime=120, inaltime=90):
+        """Descarcă în RAM o miniatură (Wikipedia / YouTube Cover) și o convertește pentru Tkinter."""
+        if not url:
+            return None
+        try:
+            from PIL import Image, ImageTk
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=3) as rasp:
+                raw_data = rasp.read()
+            pil_img = Image.open(io.BytesIO(raw_data)).convert("RGB")
+            pil_img = pil_img.resize((latime, inaltime), Image.Resampling.LANCZOS)
+            return ImageTk.PhotoImage(pil_img)
+        except Exception:
+            return None
+
     def curata_conversatia(self):
         opreste_voce()
         reseteaza_memorie_ai()
@@ -146,7 +173,7 @@ class RobotCompanionUI:
         inchide_overlay_youtube()
         self.root.destroy()
 
-    # --- OVERLAY 1: CARD VIZUAL WIKIPEDIA ---
+    # --- OVERLAY 1: CARD VIZUAL WIKIPEDIA COMPLET ---
     def afiseaza_overlay_wikipedia(self, info_wiki):
         self.ascunde_overlay()
         for w in self.frame_overlay.winfo_children():
@@ -155,37 +182,53 @@ class RobotCompanionUI:
         bara_titlu = tk.Frame(self.frame_overlay, bg="#282C34")
         bara_titlu.pack(fill="x", padx=6, pady=4)
 
+        partea = info_wiki.get("partea_curenta", 1)
+        total = info_wiki.get("total_parti", 1)
         lbl_titlu = tk.Label(
-            bara_titlu, text=f"WIKIPEDIA: {info_wiki.get('titlu', '')}",
-            font=("Arial", 13, "bold"), bg="#282C34", fg="#61AFEF", anchor="w"
+            bara_titlu,
+            text=f"WIKIPEDIA: {info_wiki.get('titlu', '')} (Partea {partea}/{total})",
+            font=("Arial", 12, "bold"), bg="#282C34", fg="#61AFEF", anchor="w"
         )
         lbl_titlu.pack(side="left", padx=6, pady=4)
 
         btn_inchide = tk.Button(
             bara_titlu, text="ÎNCHIDE", font=("Arial", 10, "bold"),
-            bg="#E06C75", fg="white", relief="flat", command=self.ascunde_overlay
+            bg="#E06C75", fg="white", relief="flat", command=self.opreste_tot_media
         )
         btn_inchide.pack(side="right", padx=4, pady=2)
 
-        btn_mai_mult = tk.Button(
-            bara_titlu, text="SPUNE MAI MULT", font=("Arial", 10, "bold"),
-            bg="#98C379", fg="#1E222A", relief="flat",
-            command=lambda: self._trimite_comanda_rapida("Spune-mi mai mult")
-        )
-        btn_mai_mult.pack(side="right", padx=4, pady=2)
+        if partea < total:
+            btn_mai_mult = tk.Button(
+                bara_titlu, text="SPUNE MAI MULT >>", font=("Arial", 10, "bold"),
+                bg="#98C379", fg="#1E222A", relief="flat",
+                command=lambda: self._trimite_comanda_rapida("Spune-mi mai mult")
+            )
+            btn_mai_mult.pack(side="right", padx=4, pady=2)
 
-        txt_rezumat = tk.Label(
-            self.frame_overlay, text=info_wiki.get("rezumat", ""),
-            font=("Arial", 11), bg="#21252B", fg="#ABB2BF",
-            wraplength=int(self.root.winfo_screenwidth() * 0.84), justify="left"
+        corp_wiki = tk.Frame(self.frame_overlay, bg="#21252B")
+        corp_wiki.pack(fill="both", expand=True, padx=10, pady=6)
+
+        img_tk = self._incarca_imagine_url(info_wiki.get("imagine", ""), latime=110, inaltime=110)
+        if img_tk:
+            self._img_referinta_ui = img_tk
+            lbl_img = tk.Label(corp_wiki, image=img_tk, bg="#21252B")
+            lbl_img.pack(side="left", padx=(4, 10), pady=4, anchor="n")
+
+        txt_wiki = scrolledtext.ScrolledText(
+            corp_wiki, font=("Arial", 12), bg="#21252B", fg="#ABB2BF",
+            wrap=tk.WORD, relief="flat"
         )
-        txt_rezumat.pack(fill="both", expand=True, padx=12, pady=8)
+        txt_wiki.pack(side="left", fill="both", expand=True)
+        txt_wiki.insert(tk.END, info_wiki.get("rezumat", ""))
+        txt_wiki.config(state=tk.DISABLED)
 
         self.frame_overlay.place(relx=0.05, rely=0.12, relwidth=0.9, relheight=0.58)
         self.frame_overlay.lift()
 
     # --- OVERLAY 2: SELECTOR 5 REZULTATE YOUTUBE VIDEO ---
     def afiseaza_overlay_youtube_lista(self, cautare, rezultate):
+        self._ultimul_cautare_yt = cautare
+        self._ultimele_rezultate_yt = rezultate
         self.ascunde_overlay()
         for w in self.frame_overlay.winfo_children():
             w.destroy()
@@ -201,7 +244,7 @@ class RobotCompanionUI:
 
         tk.Button(
             bara_titlu, text="ÎNCHIDE", font=("Arial", 10, "bold"),
-            bg="#E06C75", fg="white", relief="flat", command=self.ascunde_overlay
+            bg="#E06C75", fg="white", relief="flat", command=self.opreste_tot_media
         ).pack(side="right", padx=4, pady=2)
 
         container = tk.Frame(self.frame_overlay, bg="#21252B")
@@ -219,7 +262,7 @@ class RobotCompanionUI:
             )
             btn_play.pack(side="left", padx=4, pady=3)
 
-            titlu_scurt = item["titlu"][:65] + ("..." if len(item["titlu"]) > 65 else "")
+            titlu_scurt = item["titlu"][:60] + ("..." if len(item["titlu"]) > 60 else "")
             tk.Label(
                 rand, text=f"{titlu_scurt}  [{item.get('canal', '')} • {item.get('durata', '')}]",
                 font=("Arial", 10, "bold"), bg="#282C34", fg="white", anchor="w"
@@ -228,7 +271,67 @@ class RobotCompanionUI:
         self.frame_overlay.place(relx=0.05, rely=0.12, relwidth=0.9, relheight=0.58)
         self.frame_overlay.lift()
 
-    # --- OVERLAY 3: YOUTUBE MUSIC PLAYER MINIMALIST ---
+    # --- OVERLAY 2B: PLAYER VIDEO ÎNCORPORAT DIRECT ÎN FERESTRA TKINTER ---
+    def afiseaza_overlay_video_activ(self, piesa):
+        self.ascunde_overlay()
+        for w in self.frame_overlay.winfo_children():
+            w.destroy()
+
+        bara_sus = tk.Frame(self.frame_overlay, bg="#181A1F")
+        bara_sus.pack(fill="x", padx=4, pady=2)
+
+        titlu_scurt = piesa.get("titlu", "Video")[:42]
+        tk.Label(
+            bara_sus, text=f"VIDEO: {titlu_scurt}",
+            font=("Arial", 10, "bold"), bg="#181A1F", fg="#61AFEF"
+        ).pack(side="left", padx=6, pady=2)
+
+        tk.Button(
+            bara_sus, text="OPREȘTE VIDEO", font=("Arial", 10, "bold"),
+            bg="#E06C75", fg="white", relief="flat", command=self.opreste_tot_media
+        ).pack(side="right", padx=4, pady=2)
+
+        tk.Button(
+            bara_sus, text="DOAR AUDIO", font=("Arial", 10, "bold"),
+            bg="#C678DD", fg="white", relief="flat",
+            command=lambda: self._comuta_pe_muzica(piesa)
+        ).pack(side="right", padx=4, pady=2)
+
+        if self._ultimele_rezultate_yt:
+            tk.Button(
+                bara_sus, text="<< LISTĂ", font=("Arial", 10, "bold"),
+                bg="#4B5263", fg="white", relief="flat",
+                command=lambda: self._inapoi_la_lista_yt()
+            ).pack(side="right", padx=4, pady=2)
+
+        self.video_surface = tk.Frame(self.frame_overlay, bg="black")
+        self.video_surface.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.frame_overlay.place(relx=0.05, rely=0.12, relwidth=0.9, relheight=0.58)
+        self.frame_overlay.lift()
+        self.root.update_idletasks()
+
+        wid = self.video_surface.winfo_id()
+        threading.Thread(
+            target=deschide_overlay_youtube,
+            args=(piesa["video_id"], False, wid),
+            daemon=True
+        ).start()
+
+    def _inapoi_la_lista_yt(self):
+        inchide_overlay_youtube()
+        if self._ultimele_rezultate_yt:
+            self.afiseaza_overlay_youtube_lista(self._ultimul_cautare_yt, self._ultimele_rezultate_yt)
+
+    def _comuta_pe_muzica(self, piesa):
+        self.afiseaza_overlay_youtube_music(piesa)
+        threading.Thread(
+            target=deschide_overlay_youtube,
+            args=(piesa["video_id"], True, None),
+            daemon=True
+        ).start()
+
+    # --- OVERLAY 3: YOUTUBE MUSIC PLAYER CU COPERTĂ ȘI CONTROALE COMPLETE ---
     def afiseaza_overlay_youtube_music(self, piesa):
         self.ascunde_overlay()
         for w in self.frame_overlay.winfo_children():
@@ -243,67 +346,92 @@ class RobotCompanionUI:
         ).pack(side="left", padx=8, pady=4)
 
         tk.Button(
-            bara_sus, text="COMUTĂ VIDEO", font=("Arial", 9, "bold"),
-            bg="#61AFEF", fg="#1E222A", relief="flat",
-            command=lambda: deschide_overlay_youtube(piesa["video_id"], mod_muzica=False)
-        ).pack(side="right", padx=4)
-
-        tk.Button(
-            bara_sus, text="OPREȘTE", font=("Arial", 9, "bold"),
+            bara_sus, text="OPREȘTE", font=("Arial", 10, "bold"),
             bg="#E06C75", fg="white", relief="flat", command=self.opreste_tot_media
         ).pack(side="right", padx=4)
 
+        tk.Button(
+            bara_sus, text="COMUTĂ VIDEO", font=("Arial", 10, "bold"),
+            bg="#61AFEF", fg="#1E222A", relief="flat",
+            command=lambda: self.afiseaza_overlay_video_activ(piesa)
+        ).pack(side="right", padx=4)
+
         corp = tk.Frame(self.frame_overlay, bg="#21252B")
-        corp.pack(fill="both", expand=True, padx=16, pady=10)
+        corp.pack(fill="both", expand=True, padx=14, pady=6)
+
+        info_zona = tk.Frame(corp, bg="#21252B")
+        info_zona.pack(fill="x", pady=4)
+
+        img_cover = self._incarca_imagine_url(piesa.get("miniatura", ""), latime=110, inaltime=82)
+        if img_cover:
+            self._img_referinta_ui = img_cover
+            tk.Label(info_zona, image=img_cover, bg="#21252B").pack(side="left", padx=(6, 12))
+
+        text_zona = tk.Frame(info_zona, bg="#21252B")
+        text_zona.pack(side="left", fill="both", expand=True)
 
         self.lbl_music_title = tk.Label(
-            corp, text=piesa.get("titlu", "Melodie"),
-            font=("Arial", 14, "bold"), bg="#21252B", fg="white",
-            wraplength=int(self.root.winfo_screenwidth() * 0.8), justify="center"
+            text_zona, text=piesa.get("titlu", "Melodie"),
+            font=("Arial", 13, "bold"), bg="#21252B", fg="white",
+            wraplength=int(self.root.winfo_screenwidth() * 0.62), justify="left", anchor="w"
         )
-        self.lbl_music_title.pack(pady=(12, 4))
+        self.lbl_music_title.pack(fill="x", pady=(4, 4))
 
         self.lbl_music_artist = tk.Label(
-            corp, text=f"Artist / Canal: {piesa.get('canal', 'YouTube Music')}",
-            font=("Arial", 11), bg="#21252B", fg="#98C379"
+            text_zona, text=f"Canal / Artist: {piesa.get('canal', 'YouTube Music')} • {piesa.get('durata', 'Audio')}",
+            font=("Arial", 10, "bold"), bg="#21252B", fg="#98C379", anchor="w"
         )
-        self.lbl_music_artist.pack(pady=(0, 14))
+        self.lbl_music_artist.pack(fill="x")
 
         controale = tk.Frame(corp, bg="#21252B")
-        controale.pack(pady=6)
+        controale.pack(pady=10)
 
         tk.Button(
-            controale, text="VOL -", font=("Arial", 11, "bold"),
-            bg="#3B4252", fg="white", relief="flat", width=7,
+            controale, text="VOL -", font=("Arial", 10, "bold"),
+            bg="#3B4252", fg="white", relief="flat", width=6,
             command=lambda: schimba_volum_relativ(-12)
-        ).pack(side="left", padx=5, ipady=6)
+        ).pack(side="left", padx=4, ipady=6)
 
         tk.Button(
-            controale, text="<< PREV", font=("Arial", 11, "bold"),
-            bg="#4B5263", fg="white", relief="flat", width=8,
+            controale, text="<< PREV", font=("Arial", 10, "bold"),
+            bg="#4B5263", fg="white", relief="flat", width=7,
             command=self._muzica_prev
-        ).pack(side="left", padx=5, ipady=6)
+        ).pack(side="left", padx=4, ipady=6)
+
+        self.btn_pauza_muzica = tk.Button(
+            controale, text="PAUZĂ", font=("Arial", 10, "bold"),
+            bg="#E5C07B", fg="#1E222A", relief="flat", width=8,
+            command=self._toggle_pauza_ui
+        )
+        self.btn_pauza_muzica.pack(side="left", padx=4, ipady=6)
 
         tk.Button(
-            controale, text="STOP", font=("Arial", 11, "bold"),
-            bg="#E06C75", fg="white", relief="flat", width=8,
+            controale, text="STOP", font=("Arial", 10, "bold"),
+            bg="#E06C75", fg="white", relief="flat", width=6,
             command=self.opreste_tot_media
-        ).pack(side="left", padx=5, ipady=6)
+        ).pack(side="left", padx=4, ipady=6)
 
         tk.Button(
-            controale, text="NEXT >>", font=("Arial", 11, "bold"),
-            bg="#4B5263", fg="white", relief="flat", width=8,
+            controale, text="NEXT >>", font=("Arial", 10, "bold"),
+            bg="#4B5263", fg="white", relief="flat", width=7,
             command=self._muzica_next
-        ).pack(side="left", padx=5, ipady=6)
+        ).pack(side="left", padx=4, ipady=6)
 
         tk.Button(
-            controale, text="VOL +", font=("Arial", 11, "bold"),
-            bg="#3B4252", fg="white", relief="flat", width=7,
+            controale, text="VOL +", font=("Arial", 10, "bold"),
+            bg="#3B4252", fg="white", relief="flat", width=6,
             command=lambda: schimba_volum_relativ(12)
-        ).pack(side="left", padx=5, ipady=6)
+        ).pack(side="left", padx=4, ipady=6)
 
         self.frame_overlay.place(relx=0.05, rely=0.12, relwidth=0.9, relheight=0.58)
         self.frame_overlay.lift()
+
+    def _toggle_pauza_ui(self):
+        in_pauza = toggle_pauza_media()
+        if in_pauza:
+            self.btn_pauza_muzica.config(text="PLAY", bg="#98C379", fg="#1E222A")
+        else:
+            self.btn_pauza_muzica.config(text="PAUZĂ", bg="#E5C07B", fg="#1E222A")
 
     def _muzica_next(self):
         ales = piesa_urmatoare()
@@ -317,14 +445,18 @@ class RobotCompanionUI:
 
     def porneste_video_selectat(self, numar):
         opreste_voce()
-        ales = reda_rezultat_dupa_numar(numar)
-        if ales:
-            self.afiseaza_mesaj("Sistem", f"Redau videoclipul #{numar}: {ales['titlu']}")
+        if not self._ultimele_rezultate_yt:
+            return
+        idx = max(0, min(len(self._ultimele_rezultate_yt) - 1, int(numar) - 1))
+        ales = self._ultimele_rezultate_yt[idx]
+        self.afiseaza_mesaj("Sistem", f"Redau videoclipul #{numar}: {ales['titlu']}")
+        self.afiseaza_overlay_video_activ(ales)
 
     def opreste_tot_media(self):
         opreste_voce()
         inchide_overlay_youtube()
         self.ascunde_overlay()
+        restabileste_volum_normal()
 
     def ascunde_overlay(self):
         self.frame_overlay.place_forget()
@@ -337,7 +469,7 @@ class RobotCompanionUI:
         self.entry_input.insert(0, text_comanda)
         self.start_procesare()
 
-    # --- WAKE WORD "ROBOT" (STIL ALEXA, FĂRĂ CONFLICT CU MIC) ---
+    # --- WAKE WORD "ROBOT" (STIL ALEXA, REZILIENT ÎN BUCLĂ CONTINUĂ) ---
     def toggle_wake_word(self):
         self.wake_word_activ = not self.wake_word_activ
         if self.wake_word_activ:
@@ -348,20 +480,28 @@ class RobotCompanionUI:
             self.btn_wake.config(text="WAKE: 'ROBOT' [OFF]", bg="#4B5263", fg="white")
 
     def porneste_ascultare_wake_word(self):
-        if not self.wake_word_activ or self.ocupat or self.inchidere_aplicatie:
+        if not self.wake_word_activ or self.ocupat or self.inchidere_aplicatie or self.fir_wake_activ:
             return
         self.oprire_wake_event.clear()
+        self.fir_wake_activ = True
         threading.Thread(target=self._fir_wake_word, daemon=True).start()
 
     def _fir_wake_word(self):
-        detectat = asteapta_wake_word(self.oprire_wake_event)
-        if detectat and not self.oprire_wake_event.is_set() and not self.ocupat:
-            self.root.after(0, self._la_activare_wake_word)
+        try:
+            while self.wake_word_activ and not self.oprire_wake_event.is_set() and not self.ocupat and not self.inchidere_aplicatie:
+                detectat = asteapta_wake_word(self.oprire_wake_event)
+                if detectat and not self.oprire_wake_event.is_set() and not self.ocupat:
+                    self.fir_wake_activ = False
+                    self.root.after(0, self._la_activare_wake_word)
+                    return
+                if not self.oprire_wake_event.is_set():
+                    time.sleep(0.5)
+        finally:
+            self.fir_wake_activ = False
 
     def _la_activare_wake_word(self):
         if self.ocupat:
             return
-        seteaza_volum_sistem(25)
         self.declanseaza_ascultare()
 
     # --- STREAMING ÎN UI (CUVÂNT CU CUVÂNT) ---
@@ -442,7 +582,8 @@ class RobotCompanionUI:
             return
         self.ocupat = True
         self.oprire_wake_event.set()
-        seteaza_volum_sistem(25)
+        # Atenuăm volumul DOAR dacă rulează muzică/video în fundal
+        atenueaza_volum_temporar()
 
         if self.tastatura_activa:
             self.toggle_tastatura()
@@ -451,10 +592,13 @@ class RobotCompanionUI:
         threading.Thread(target=self.fir_executie_ascultare, daemon=True).start()
 
     def fir_executie_ascultare(self):
-        time.sleep(0.12)
+        time.sleep(0.15)
         text_recunoscut = asculta_voce(
             on_status=lambda faza: self.root.after(0, self.actualizeaza_stare_mic, faza)
         )
+        # CRITIC: Readucem IMEDIAT volumul la 95% după ce s-a încheiat înregistrarea microfonului!
+        restabileste_volum_normal()
+
         if not text_recunoscut:
             threading.Thread(target=vorbeste, args=("Nu am înțeles, repetă te rog.", "ro"), daemon=True).start()
         self.root.after(0, self.finalizare_ascultare, text_recunoscut)
@@ -470,7 +614,6 @@ class RobotCompanionUI:
             self.start_procesare()
         else:
             self.ocupat = False
-            seteaza_volum_sistem(95)
             self.btn_send.config(bg="#61AFEF", fg="#1E222A", text="TRIMITE")
             self.afiseaza_mesaj("Sistem", "Nu am înțeles, repetă te rog.")
             self.porneste_ascultare_wake_word()
@@ -527,7 +670,7 @@ class RobotCompanionUI:
             self.btn_kb.config(bg="#98C379")
             self.tastatura_activa = True
 
-    # --- LOGICA AI STREAMING ÎN UI + VOCE FLUENTĂ + OVERLAY-URI ---
+    # --- LOGICA AI STREAMING ÎN UI + VOCE TARE ȘI CLARĂ + OVERLAY-URI ---
     def start_procesare(self):
         if self.ocupat:
             return
@@ -556,6 +699,7 @@ class RobotCompanionUI:
 
     def obtine_raspuns(self, mesaj):
         try:
+            restabileste_volum_normal()
             antet_afisat = False
 
             def la_chunk(c):
@@ -581,6 +725,8 @@ class RobotCompanionUI:
                 self.root.after(0, self.afiseaza_overlay_wikipedia, date_ui)
             elif actiune == "reda_youtube" and isinstance(date_ui, list):
                 self.root.after(0, self.afiseaza_overlay_youtube_lista, parametru, date_ui)
+            elif actiune == "selecteaza_youtube" and isinstance(date_ui, dict):
+                self.root.after(0, self.afiseaza_overlay_video_activ, date_ui)
             elif actiune == "reda_muzica" and isinstance(date_ui, dict):
                 self.root.after(0, self.afiseaza_overlay_youtube_music, date_ui)
             elif actiune == "opreste_media":
@@ -593,8 +739,6 @@ class RobotCompanionUI:
 
             if actiune == "reda_muzica" and isinstance(date_ui, dict):
                 deschide_overlay_youtube(date_ui["video_id"], mod_muzica=True)
-
-            seteaza_volum_sistem(95)
 
         except Exception as e:
             self.root.after(0, lambda: self.afiseaza_mesaj("Eroare Sistem", f"Eroare: {e}"))

@@ -63,10 +63,6 @@ def _obtine_cale_audio_temp():
 
 
 def _curata_si_adapteaza_text(text, limba="ro"):
-    """
-    Curăță simbolurile Markdown și păstrează 100% intacte cuvintele și cratimele românești,
-    exact ca în prima versiune, adaptând doar termenii tehnici englezești.
-    """
     if not text:
         return ""
 
@@ -97,7 +93,7 @@ async def _genereaza_fisier_async(text, voce, cale_fisier):
 
 
 def opreste_voce():
-    """Oprește imediat redarea vocală curentă (Barge-In)."""
+    """Oprește imediat redarea vocală curentă."""
     global _PROCES_CURENT_MPG123
     if _PROCES_CURENT_MPG123 and _PROCES_CURENT_MPG123.poll() is None:
         try:
@@ -139,10 +135,21 @@ def _reda_fisier_audio(cale_fisier):
 
 
 def vorbeste(text, limba="ro"):
+    """
+    Se asigură că volumul sistemului este ridicat la nivelul normal (fără să rămână niciodată pe 25%),
+    sintetizează răspunsul în RAM (/dev/shm) și îl redă tare și clar.
+    """
     t0 = time.perf_counter()
     text_adaptat = _curata_si_adapteaza_text(text, limba=limba)
     if not text_adaptat:
         return
+
+    # Asigurăm volumul tare înainte de fiecare vorbire!
+    try:
+        from brain.abilities.youtube_player import restabileste_volum_normal
+        restabileste_volum_normal()
+    except Exception:
+        pass
 
     voce = VOCE_RO if limba == "ro" else VOCE_EN
     cale_temp = _obtine_cale_audio_temp()
@@ -163,4 +170,4 @@ def vorbeste(text, limba="ro"):
 
 
 if __name__ == "__main__":
-    vorbeste("Salut! Acum vorbesc din nou clar, cursiv și natural în limba română, cu un plan bun pe ecran!", limba="ro")
+    vorbeste("Salut! Volumul este acum stabil și puternic la fiecare răspuns!", limba="ro")

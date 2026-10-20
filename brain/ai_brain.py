@@ -47,10 +47,10 @@ REGULI CRITICE DE LIMBĂ ȘI ORTOGRAFIE:
    - Conversație normală: [vorbeste_normal] Răspunsul tău...
    - Glumă: [spune_gluma] Răspunsul tău...
    - Vreme (dacă nu ai deja [DATE METEO]): [arata_vreme:Oraș]
-   - Wikipedia / enciclopedie / cine a fost / ce este: [cauta_wikipedia:Subiect]
+   - Wikipedia / enciclopedie / cine a fost / informații istorice sau științifice: [cauta_wikipedia:Subiect]
    - Continuare articol Wikipedia ("spune-mi mai mult"): [continua_wikipedia]
    - Căutare videoclip YouTube: [reda_youtube:termen căutat] Răspuns scurt...
-   - Redare muzică / melodie YouTube Music: [reda_muzica:artist sau melodie] Răspuns scurt...
+   - Redare muzică / melodie YouTube Music (dacă utilizatorul nu dă o piesă anume, alege tu o piesă sau un gen popular în parametru!): [reda_muzica:artist sau melodie] Răspuns scurt...
    - Oprire muzică sau videoclip: [opreste_media] Am oprit redarea."""
 
 istoric_conversatie = []
@@ -67,6 +67,11 @@ LUNI_AN_RO = [
 CUVINTE_CHEIE_METEO = re.compile(
     r"\b(vreme\w*|plou\w*|ploai\w*|ninge|ninso\w*|grade|cald|frig|ger|soare|înnorat|innorat|"
     r"furtun\w*|vânt\w*|vant\w*|ceață|ceata|prognoz\w*|meteo|weather|rain\w*|snow\w*|sunny|forecast)\b",
+    re.IGNORECASE
+)
+
+CUVINTE_EXPLICITE_WIKI = re.compile(
+    r"(?:caută pe wikipedia|cauta pe wikipedia|pe wikipedia despre|wikipedia)\s+(.+)",
     re.IGNORECASE
 )
 
@@ -294,7 +299,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
     text_curat = text.strip()
     text_mic = text_curat.lower()
 
-    # 1. QoL: Răspuns instantaneu la Oră și Dată (0.0s latență!)
+    # 1. QoL: Răspuns instantaneu la Oră și Dată
     if CUVINTE_ORA_DATA.search(text_mic):
         acum = datetime.now()
         zi_nume = ZILE_SAPTAMANA_RO[acum.weekday()]
@@ -304,7 +309,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
             on_text_chunk(msg)
         return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg}
 
-    # 2. QoL: Reglare Volum prin Comandă Vocală (0.0s latență!)
+    # 2. QoL: Reglare Volum prin Comandă Vocală
     if any(k in text_mic for k in ("dă mai tare", "da mai tare", "volum mai mare", "volum maxim", "volumul la maxim")):
         vol = seteaza_volum_sistem(100) if "maxim" in text_mic else schimba_volum_relativ(15)
         msg = f"Am ridicat volumul la {vol}%."
@@ -319,7 +324,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
             on_text_chunk(msg)
         return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg}
 
-    # 3. Comenzi rapide de control media (0.0s latență!)
+    # 3. Comenzi rapide de control media
     if CUVINTE_OPRIRE_MEDIA.search(text_mic):
         inchide_overlay_youtube()
         msg = "Am oprit redarea."
@@ -354,12 +359,33 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
 
     # 4. Continuare articol Wikipedia ("Spune-mi mai mult")
     if CUVINTE_MAI_MULT_WIKI.search(text_mic):
-        continuare = continua_wikipedia()
+        rez_cont = continua_wikipedia()
+        msg_cont = rez_cont["mesaj"]
         if on_text_chunk:
-            on_text_chunk(continuare)
-        return {"actiune": "continua_wikipedia", "parametru": "", "mesaj": continuare}
+            on_text_chunk(msg_cont)
+        return {
+            "actiune": "cauta_wikipedia" if rez_cont["date_ui"] else "continua_wikipedia",
+            "parametru": "",
+            "mesaj": msg_cont,
+            "date_ui": rez_cont["date_ui"]
+        }
 
-    # 5. One-Shot Weather
+    # 5. Căutare directă Wikipedia când utilizatorul menționează explicit "Wikipedia"
+    m_wiki = CUVINTE_EXPLICITE_WIKI.search(text_curat)
+    if m_wiki:
+        subiect_wiki = m_wiki.group(1).strip()
+        info_wiki = cauta_wikipedia(subiect_wiki, limba=limba)
+        if "eroare" not in info_wiki:
+            if on_text_chunk:
+                on_text_chunk(info_wiki["rezumat"])
+            return {
+                "actiune": "cauta_wikipedia",
+                "parametru": info_wiki["titlu"],
+                "mesaj": info_wiki["rezumat"],
+                "date_ui": info_wiki
+            }
+
+    # 6. One-Shot Weather
     if CUVINTE_CHEIE_METEO.search(text_curat):
         oras_detectat = _detecteaza_oras_rapid(text_curat)
         raport_date = get_weather(oras_detectat)
@@ -378,7 +404,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
         rez["actiune"] = "arata_vreme"
         return rez
 
-    # 6. Apelul principal către Gemini
+    # 7. Apelul principal către Gemini
     raspuns_robot = _stream_de_la_gemini(
         text_curat,
         temperatura=0.45,
@@ -425,6 +451,18 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
             "date_ui": info_wiki
         }
 
+    if actiune == "continua_wikipedia":
+        rez_cont = continua_wikipedia()
+        msg_cont = rez_cont["mesaj"]
+        if on_text_chunk and not raspuns_robot.get("mesaj"):
+            on_text_chunk(msg_cont)
+        return {
+            "actiune": "cauta_wikipedia" if rez_cont["date_ui"] else "continua_wikipedia",
+            "parametru": "",
+            "mesaj": msg_cont,
+            "date_ui": rez_cont["date_ui"]
+        }
+
     if actiune == "reda_youtube":
         cautare = parametru or text_curat
         rezultate = cauta_youtube_oficial(cautare, doar_muzica=False, max_rezultate=5)
@@ -451,7 +489,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
         }
 
     if actiune == "reda_muzica":
-        cautare = parametru or text_curat
+        cautare = parametru if parametru else "hituri românești"
         rezultate = cauta_youtube_oficial(cautare, doar_muzica=True, max_rezultate=5)
         if not rezultate:
             msg = f"Nu am găsit melodia {cautare} pe YouTube Music."

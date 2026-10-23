@@ -1,0 +1,66 @@
+{
+  "debug": true,
+  "ai": {
+    "model_principal": "gemini-3.5-flash",
+    "modele_rezerva": [
+      "gemini-3.8-flash",
+      "gemini-3.5-flash-lite",
+      "gemini-3.1-flash-lite",
+      "gemini-flash-latest"
+    ],
+    "timeout_ms": 15000,
+    "temperatura": 0.45,
+    "max_istoric": 8
+  },
+  "audio_out": {
+    "tts_voice_ro": "ro-RO-EmilNeural",
+    "tts_voice_en": "en-US-ChristopherNeural",
+    "tts_rate": "+8%",
+    "volum_normal": 95,
+    "volum_ducking": 30
+  },
+  "microphone": {
+    "preferred_device_index": null,
+    "preferred_keywords": ["USB", "Camera", "Webcam", "Audio", "Mic"],
+    "sample_rate": 8000,
+    "chunk_size": 512,
+    "auto_gain_alsa_percent": 75,
+    "highpass_cutoff_hz": 100,
+    "target_rms": 3200,
+    "max_dsp_gain": 3.5,
+    "ambient_multiplier": 1.25,
+    "min_energy_threshold": 280,
+    "max_energy_threshold": 3200,
+    "pause_threshold": 0.85,
+    "phrase_time_limit": 10.0,
+    "listen_timeout": 6.0
+  },
+  "wake_word": {
+    "enabled_by_default": true,
+    "preferred_strategy": "auto",
+    "strategies_order": ["vosk_phonetic", "openwakeword", "energy_vad_stt"],
+    "sensitivity_rms_ratio": 1.35,
+    "min_trigger_rms": 260,
+    "fuzzy_threshold": 0.72,
+    "ignore_after_speak_sec": 0.9,
+    "vosk_gain": 3.0,
+    "custom_triggers": [
+      "robot", "robotul", "robotule", "robote", "robo", "robert", "robbie",
+      "rob", "ropot", "rombot", "raw bought", "row boat", "row bought",
+      "rah bought", "roar boat", "rabat", "rub out", "hey robot", "ok robot"
+    ]
+  },
+  "youtube": {
+    "max_video_height": 360,
+    "max_video_fps": 25,
+    "search_timeout_sec": 6,
+    "ytdlp_timeout_sec": 12,
+    "cache_ttl_sec": 1800,
+    "prefetch_next": true
+  },
+  "ui": {
+    "debounce_ms": 250,
+    "clock_refresh_ms": 10000,
+    "health_refresh_ms": 15000
+  }
+}

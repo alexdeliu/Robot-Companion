@@ -1,24 +1,30 @@
 import os
 import re
 import json
+import time
+import socket
 import signal
 import shutil
+import threading
 import subprocess
 import urllib.parse
 import urllib.request
-from dotenv import load_dotenv
 
-load_dotenv()
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
-DEBUG = os.getenv("DEBUG", "1") == "1"
+from config import CFG, YOUTUBE_API_KEY, DEBUG
+from system_health import logger
 
 _ULTIMELE_REZULTATE_YT = []
 _INDEX_CURENT_YT = 0
 _MOD_CURENT_MUZICA = False
 _PROCES_PLAYER_YT = None
 _WINDOW_ID_CONTAINER = None
-_VOLUM_NORMAL = 95
+_VOLUM_NORMAL = int(CFG["audio_out"].get("volum_normal", 95))
+_VOLUM_DUCKING = int(CFG["audio_out"].get("volum_ducking", 30))
 _ESTE_IN_PAUZA = False
+
+_CAUTARE_CACHE = {}
+_STREAM_URL_CACHE = {}
+_MPV_SOCKET_PATH = "/tmp/robot_mpv_ipc.sock"
 
 HEADERS_WEB = {
     "User-Agent": (
@@ -29,12 +35,25 @@ HEADERS_WEB = {
 }
 
 
+def _trimite_comanda_mpv_ipc(lista_cmd):
+    """Trimite o comandă JSON direct în socket-ul UNIX al lui mpv (0ms, fără a omorî procesul!)."""
+    if os.name == "nt" or not os.path.exists(_MPV_SOCKET_PATH):
+        return False
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.settimeout(0.3)
+            s.connect(_MPV_SOCKET_PATH)
+            payload = json.dumps({"command": lista_cmd}) + "\n"
+            s.sendall(payload.encode("utf-8"))
+        return True
+    except Exception:
+        return False
+
+
 def _aplica_volum_alsa(procent):
-    """
-    Setează volumul în ALSA folosind flag-ul '-M' (scara logaritmică naturală a urechii umane,
-    identică cu cea din alsamixer, astfel încât sunetul să fie mereu puternic și clar!).
-    """
     val = max(15, min(100, int(procent)))
+    # Reglăm atât în mpv IPC cât și în ALSA
+    _trimite_comanda_mpv_ipc(["set_property", "volume", val])
     if os.name != "nt" and shutil.which("amixer"):
         for control in ("PCM", "Master", "Headphone", "Speaker"):
             subprocess.run(
@@ -46,7 +65,6 @@ def _aplica_volum_alsa(procent):
 
 
 def seteaza_volum_sistem(procent, salveaza_ca_normal=True):
-    """Setează volumul sistemului. Dacă salveaza_ca_normal=False, face doar atenuare temporară (ducking)."""
     global _VOLUM_NORMAL
     val = _aplica_volum_alsa(procent)
     if salveaza_ca_normal:
@@ -55,13 +73,11 @@ def seteaza_volum_sistem(procent, salveaza_ca_normal=True):
 
 
 def atenueaza_volum_temporar():
-    """Scade volumul doar în timp ce microfonul înregistrează, fără a pierde nivelul normal (95%)."""
     if este_media_activa():
-        _aplica_volum_alsa(35)
+        _aplica_volum_alsa(_VOLUM_DUCKING)
 
 
 def restabileste_volum_normal():
-    """Readuce garantat volumul la nivelul puternic (_VOLUM_NORMAL = 95%) înainte ca robotul să vorbească."""
     return _aplica_volum_alsa(_VOLUM_NORMAL)
 
 
@@ -77,35 +93,75 @@ def este_media_activa():
 
 def _extrage_stream_direct_ytdlp(video_id, doar_audio=True):
     """
-    Folosește yt-dlp pentru a extrage URL-ul direct al fluxului audio/video de pe YouTube.
-    Astfel ocolim 100% eroarea 150/153 din YouTube Embed și nu mai avem nevoie de Chromium!
+    Extrage URL-ul direct cu cache (valabil 25 min) și retry, folosind rezoluție 360p
+    optimizată pentru display-ul SPI și CPU-ul Raspberry Pi 3 B+.
     """
+    cheie = f"{video_id}:{'audio' if doar_audio else 'video'}"
+    acum = time.time()
+    if cheie in _STREAM_URL_CACHE and (acum - _STREAM_URL_CACHE[cheie][0] < 1500):
+        return _STREAM_URL_CACHE[cheie][1]
+
     url_yt = f"https://www.youtube.com/watch?v={video_id}"
+    h_max = int(CFG["youtube"].get("max_video_height", 360))
+    fps_max = int(CFG["youtube"].get("max_video_fps", 30))
+    fmt = (
+        "bestaudio[ext=m4a]/bestaudio/best"
+        if doar_audio
+        else f"best[height<={h_max}][fps<={fps_max}][ext=mp4]/best[height<={h_max}]/best"
+    )
+    timeout_s = str(int(CFG["youtube"].get("ytdlp_timeout_sec", 12)))
+
+    # Rulăm yt-dlp în subproces izolat ca să elibereze 100% memoria RAM (70MB) imediat după extracție!
+    cmd_bin = shutil.which("yt-dlp")
+    if cmd_bin:
+        for _ in range(2):
+            try:
+                out = subprocess.check_output(
+                    [cmd_bin, "--no-warnings", "--no-playlist", "--socket-timeout", timeout_s, "-f", fmt, "-g", url_yt],
+                    stderr=subprocess.DEVNULL,
+                    timeout=float(timeout_s) + 3.0,
+                    text=True
+                ).strip()
+                if out:
+                    url_gasit = out.splitlines()[0].strip()
+                    _STREAM_URL_CACHE[cheie] = (acum, url_gasit)
+                    return url_gasit
+            except Exception:
+                time.sleep(0.2)
+
     try:
         import yt_dlp
-        fmt = "bestaudio/best" if doar_audio else "best[height<=480][ext=mp4]/best[height<=480]/best"
-        ydl_opts = {
-            "format": fmt,
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "socket_timeout": 5,
-        }
+        ydl_opts = {"format": fmt, "quiet": True, "no_warnings": True, "noplaylist": True, "socket_timeout": 6}
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url_yt, download=False)
-            return info.get("url")
+            url_gasit = info.get("url")
+            if url_gasit:
+                _STREAM_URL_CACHE[cheie] = (acum, url_gasit)
+            return url_gasit
     except Exception as e:
-        if DEBUG:
-            print(f"[AVERTISMENT YT-DLP]: {e}")
+        logger.warning(f"[YT-DLP]: Eșec extracție pentru {video_id}: {e}")
         return None
 
 
+def _prefetch_piesa_urmatoare():
+    """Pre-încarcă în fundal URL-ul piesei următoare pentru schimbare instantanee la NEXT."""
+    if not CFG["youtube"].get("prefetch_next", True) or len(_ULTIMELE_REZULTATE_YT) < 2:
+        return
+    idx_urm = (_INDEX_CURENT_YT + 1) % len(_ULTIMELE_REZULTATE_YT)
+    vid_urm = _ULTIMELE_REZULTATE_YT[idx_urm]["video_id"]
+    threading.Thread(
+        target=_extrage_stream_direct_ytdlp,
+        args=(vid_urm, _MOD_CURENT_MUZICA),
+        daemon=True
+    ).start()
+
+
 def _cauta_youtube_fara_cheie(interogare, max_rezultate=5):
-    """Caută direct pe YouTube și returnează 5 rezultate reale (fără a necesita cheie API)."""
     q_enc = urllib.parse.quote(interogare.strip())
     url = f"https://www.youtube.com/results?search_query={q_enc}&hl=ro"
     req = urllib.request.Request(url, headers=HEADERS_WEB)
-    with urllib.request.urlopen(req, timeout=5) as rasp:
+    timeout_s = float(CFG["youtube"].get("search_timeout_sec", 6))
+    with urllib.request.urlopen(req, timeout=timeout_s) as rasp:
         html = rasp.read().decode("utf-8", errors="ignore")
 
     m = re.search(r"var ytInitialData\s*=\s*(\{.*?\});</script>", html)
@@ -154,8 +210,15 @@ def _cauta_youtube_fara_cheie(interogare, max_rezultate=5):
 def cauta_youtube_oficial(interogare, doar_muzica=False, max_rezultate=5):
     global _ULTIMELE_REZULTATE_YT, _MOD_CURENT_MUZICA
     _MOD_CURENT_MUZICA = doar_muzica
-    termen_baza = interogare.strip() or ("muzică populară hituri" if doar_muzica else "documentare românia")
+    termen_baza = interogare.strip() or ("hituri românești" if doar_muzica else "documentare românia")
     termen = f"{termen_baza} official audio" if doar_muzica else termen_baza
+
+    cheie_c = f"{termen.lower()}:{max_rezultate}"
+    acum = time.time()
+    ttl = int(CFG["youtube"].get("cache_ttl_sec", 1800))
+    if cheie_c in _CAUTARE_CACHE and (acum - _CAUTARE_CACHE[cheie_c][0] < ttl):
+        _ULTIMELE_REZULTATE_YT = _CAUTARE_CACHE[cheie_c][1]
+        return _ULTIMELE_REZULTATE_YT
 
     if YOUTUBE_API_KEY:
         try:
@@ -184,28 +247,25 @@ def cauta_youtube_oficial(interogare, doar_muzica=False, max_rezultate=5):
                 })
             if rezultate:
                 _ULTIMELE_REZULTATE_YT = rezultate
+                _CAUTARE_CACHE[cheie_c] = (acum, rezultate)
                 return rezultate
         except Exception as e:
-            if DEBUG:
-                print(f"[AVERTISMENT YOUTUBE API]: {e}, folosesc căutarea directă...")
+            logger.warning(f"[YOUTUBE API]: {e}, folosesc căutarea directă...")
 
     try:
         rezultate = _cauta_youtube_fara_cheie(termen, max_rezultate=max_rezultate)
         _ULTIMELE_REZULTATE_YT = rezultate
+        if rezultate:
+            _CAUTARE_CACHE[cheie_c] = (acum, rezultate)
         return rezultate
     except Exception as e:
-        print(f"[EROARE CĂUTARE YOUTUBE]: {e}")
+        logger.error(f"[EROARE CĂUTARE YOUTUBE]: {e}")
         return []
 
 
 def deschide_overlay_youtube(video_id, mod_muzica=False, window_id=None):
     """
-    Redă melodia sau videoclipul rapid și sigur, FĂRĂ Chromium fullscreen blocat:
-    - Extrage stream-ul direct prin yt-dlp (funcționează pe 100% din melodii, fără Eroarea 150!).
-    - Redă cu mpv / ffplay / cvlc.
-    - Dacă mod_muzica=False și avem window_id (cadrul din Tkinter), mpv randează videoclipul
-      DIRECT în interiorul ferestrei Robot Companion (--wid), astfel încât butoanele OPREȘTE / ÎNCHIDE
-      rămân mereu deasupra și funcționale!
+    Pornește mpv cu socket IPC (/tmp/robot_mpv_ipc.sock) și parametri optimizați pentru SPI display.
     """
     global _PROCES_PLAYER_YT, _INDEX_CURENT_YT, _MOD_CURENT_MUZICA, _WINDOW_ID_CONTAINER, _ESTE_IN_PAUZA
     inchide_overlay_youtube()
@@ -221,70 +281,61 @@ def deschide_overlay_youtube(video_id, mod_muzica=False, window_id=None):
             break
 
     url_direct = _extrage_stream_direct_ytdlp(video_id, doar_audio=mod_muzica)
-    tinta_redare = url_direct or f"https://www.youtube.com/watch?v={video_id}"
+    if not url_direct:
+        logger.error(f"[MEDIA]: Nu am putut extrage stream-ul pentru {video_id}.")
+        return False
 
-    # 1. Varianta optimă pe Raspberry Pi și Linux: MPV (doar 15MB RAM, încorporat direct în Tkinter!)
     if shutil.which("mpv"):
-        args = ["mpv", "--no-terminal", "--really-quiet", "-- keep-open=no"]
-        args = ["mpv", "--no-terminal", "--really-quiet", "--keep-open=no"]
+        try:
+            if os.path.exists(_MPV_SOCKET_PATH):
+                os.remove(_MPV_SOCKET_PATH)
+        except Exception:
+            pass
+
+        args = [
+            "mpv",
+            "--no-terminal",
+            "--really-quiet",
+            "--keep-open=no",
+            f"--input-ipc-server={_MPV_SOCKET_PATH}",
+            f"--volume={_VOLUM_NORMAL}",
+            "--cache=yes",
+            "--demuxer-max-bytes=12M"
+        ]
         if mod_muzica:
             args.append("--no-video")
         else:
-            args.extend(["--vo=x11", "--profile=fast", "--hwdec=auto"])
+            args.extend([
+                "--vo=x11",
+                "--profile=fast",
+                "--hwdec=auto",
+                "--vd-lavc-skiploopfilter=all",
+                "--sws-scaler=fast-bilinear"
+            ])
             if window_id:
                 args.append(f"--wid={int(window_id)}")
             else:
-                args.extend(["--geometry=720x400+40+60", "--ontop"])
-        args.append(tinta_redare)
+                args.extend(["--geometry=640x360+40+60", "--ontop"])
+        args.append(url_direct)
+
         _PROCES_PLAYER_YT = subprocess.Popen(
             args,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True
         )
+        _prefetch_piesa_urmatoare()
         return True
 
-    # 2. Fallback pe FFPLAY (vine cu ffmpeg)
-    if shutil.which("ffplay") and url_direct:
+    if shutil.which("ffplay"):
         args = ["ffplay", "-autoexit", "-loglevel", "quiet"]
         if mod_muzica:
             args.append("-nodisp")
         else:
-            args.extend(["-x", "680", "-y", "360", "-left", "60", "-top", "75", "-alwaysontop"])
+            args.extend(["-x", "640", "-y", "360", "-alwaysontop"])
         args.append(url_direct)
         _PROCES_PLAYER_YT = subprocess.Popen(
-            args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True
-        )
-        return True
-
-    # 3. Fallback pe VLC (cvlc)
-    if shutil.which("cvlc") and url_direct:
-        args = ["cvlc", "--play-and-exit", "--quiet"]
-        if mod_muzica:
-            args.append("--no-video")
-        elif window_id:
-            args.extend(["--drawable-xid", str(int(window_id))])
-        args.append(url_direct)
-        _PROCES_PLAYER_YT = subprocess.Popen(
-            args,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True
-        )
-        return True
-
-    # 4. Fallback pe Windows sau dacă doar ffmpeg + mpg123 există pe sistem
-    if os.name != "nt" and shutil.which("ffmpeg") and shutil.which("mpg123") and url_direct:
-        cmd_sh = f'ffmpeg -loglevel quiet -i "{url_direct}" -f mp3 - | mpg123 -q -'
-        _PROCES_PLAYER_YT = subprocess.Popen(
-            cmd_sh,
-            shell=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True
+            args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True
         )
         return True
 
@@ -293,33 +344,53 @@ def deschide_overlay_youtube(video_id, mod_muzica=False, window_id=None):
         webbrowser.open(f"https://www.youtube.com/watch?v={video_id}")
         return True
 
-    print("[EROARE MEDIA]: Instalează mpv pe Raspberry Pi: sudo apt-get install -y mpv ffmpeg")
     return False
 
 
+def deruleaza_media(secunde_delta):
+    """Derulează rapid ±10 secunde prin socket-ul IPC al lui mpv."""
+    return _trimite_comanda_mpv_ipc(["seek", int(secunde_delta), "relative"])
+
+
 def toggle_pauza_media():
-    """Pune pe pauză sau reia melodia/videoclipul curent fără a-l închide (SIGSTOP / SIGCONT pe Linux)."""
+    """Comută Play/Pauză instantaneu prin IPC socket (cu fallback pe SIGSTOP)."""
     global _ESTE_IN_PAUZA
-    if not este_media_activa() or os.name == "nt":
+    if not este_media_activa():
         return False
-    try:
-        pgid = os.getpgid(_PROCES_PLAYER_YT.pid)
-        if not _ESTE_IN_PAUZA:
-            os.killpg(pgid, signal.SIGSTOP)
-            _ESTE_IN_PAUZA = True
-        else:
-            os.killpg(pgid, signal.SIGCONT)
-            _ESTE_IN_PAUZA = False
+
+    if _trimite_comanda_mpv_ipc(["cycle", "pause"]):
+        _ESTE_IN_PAUZA = not _ESTE_IN_PAUZA
         return _ESTE_IN_PAUZA
-    except Exception:
-        return False
+
+    if os.name != "nt":
+        try:
+            pgid = os.getpgid(_PROCES_PLAYER_YT.pid)
+            if not _ESTE_IN_PAUZA:
+                os.killpg(pgid, signal.SIGSTOP)
+                _ESTE_IN_PAUZA = True
+            else:
+                os.killpg(pgid, signal.SIGCONT)
+                _ESTE_IN_PAUZA = False
+            return _ESTE_IN_PAUZA
+        except Exception:
+            pass
+    return False
 
 
-def reda_rezultat_dupa_numar(numar_1_5, window_id=None):
+def selecteaza_meta_dupa_numar(numar_1_5):
+    """Returnează metadatele videoclipului 1..5 fără a porni mpv prematur înaintea cadrului UI."""
+    global _INDEX_CURENT_YT
     if not _ULTIMELE_REZULTATE_YT:
         return None
     idx = max(0, min(len(_ULTIMELE_REZULTATE_YT) - 1, int(numar_1_5) - 1))
-    ales = _ULTIMELE_REZULTATE_YT[idx]
+    _INDEX_CURENT_YT = idx
+    return _ULTIMELE_REZULTATE_YT[idx]
+
+
+def reda_rezultat_dupa_numar(numar_1_5, window_id=None):
+    ales = selecteaza_meta_dupa_numar(numar_1_5)
+    if not ales:
+        return None
     wid = window_id if window_id is not None else _WINDOW_ID_CONTAINER
     deschide_overlay_youtube(ales["video_id"], mod_muzica=_MOD_CURENT_MUZICA, window_id=wid)
     return ales
@@ -348,25 +419,24 @@ def piesa_anterioara(window_id=None):
 
 
 def inchide_overlay_youtube():
-    """Închide garantat și instantaneu orice proces audio/video pornit."""
+    """Închide curat mpv prin IPC quit (evită XError BadWindow în Tkinter), apoi curăță procesul."""
     global _PROCES_PLAYER_YT, _ESTE_IN_PAUZA
     _ESTE_IN_PAUZA = False
-    if _PROCES_PLAYER_YT:
-        try:
-            if os.name != "nt":
-                pgid = os.getpgid(_PROCES_PLAYER_YT.pid)
-                os.killpg(pgid, signal.SIGCONT)
-                os.killpg(pgid, signal.SIGTERM)
-            else:
-                _PROCES_PLAYER_YT.terminate()
-        except Exception:
-            pass
-        _PROCES_PLAYER_YT = None
+    proc = _PROCES_PLAYER_YT
+    _PROCES_PLAYER_YT = None
 
-    if os.name != "nt":
-        for proc_name in ("mpv", "ffplay", "vlc"):
-            subprocess.run(
-                ["pkill", "-9", "-f", proc_name],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+    if proc and proc.poll() is None:
+        _trimite_comanda_mpv_ipc(["quit"])
+        try:
+            proc.wait(timeout=0.4)
+        except Exception:
+            try:
+                if os.name != "nt":
+                    pgid = os.getpgid(proc.pid)
+                    os.killpg(pgid, signal.SIGCONT)
+                    os.killpg(pgid, signal.SIGTERM)
+                else:
+                    proc.terminate()
+                proc.wait(timeout=0.4)
+            except Exception:
+                pass

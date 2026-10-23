@@ -5,18 +5,22 @@ import time
 import shutil
 import asyncio
 import tempfile
+import threading
 import subprocess
 import unicodedata
 import edge_tts
 
-DEBUG = os.getenv("DEBUG", "1") == "1"
-VOCE_RO = os.getenv("TTS_VOICE_RO", "ro-RO-EmilNeural")
-VOCE_EN = os.getenv("TTS_VOICE_EN", "en-US-ChristopherNeural")
-VITEZA_VOCE = os.getenv("TTS_RATE", "+8%")
+from config import VOCE_RO, VOCE_EN, VITEZA_VOCE, DEBUG
+from system_health import logger
 
 _MIXER_INITIALIZAT = False
 _PROCES_CURENT_MPG123 = None
-_CALE_DICT = os.path.join(os.path.dirname(__file__), "pronuntie_ro.json")
+_VORBIRE_LOCK = threading.Lock()
+_ESTE_VORBIRE_ACTIVA = False
+_ULTIMA_VORBIRE_FINAL = 0.0
+_ANULARE_VORBIRE = threading.Event()
+
+_CALE_DICT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pronuntie_ro.json")
 
 _DICT_IMPLICIT = {
     "raspberry pi": "razberi pai",
@@ -33,6 +37,16 @@ _DICT_IMPLICIT = {
     "gemini": "geminai",
     "github": "ghithab"
 }
+
+
+def este_vorbire_activa():
+    return _ESTE_VORBIRE_ACTIVA
+
+
+def timp_de_la_ultima_vorbire():
+    if _ESTE_VORBIRE_ACTIVA:
+        return 0.0
+    return time.monotonic() - _ULTIMA_VORBIRE_FINAL
 
 
 def _incarca_dictionar():
@@ -57,9 +71,10 @@ _ABREVIERI_RO = [
 
 
 def _obtine_cale_audio_temp():
+    pid_tid = f"{os.getpid()}_{threading.get_ident()}"
     if os.path.isdir("/dev/shm"):
-        return "/dev/shm/robot_tts.mp3"
-    return os.path.join(tempfile.gettempdir(), "robot_tts.mp3")
+        return f"/dev/shm/robot_tts_{pid_tid}.mp3"
+    return os.path.join(tempfile.gettempdir(), f"robot_tts_{pid_tid}.mp3")
 
 
 def _curata_si_adapteaza_text(text, limba="ro"):
@@ -93,23 +108,35 @@ async def _genereaza_fisier_async(text, voce, cale_fisier):
 
 
 def opreste_voce():
-    """Oprește imediat redarea vocală curentă."""
-    global _PROCES_CURENT_MPG123
-    if _PROCES_CURENT_MPG123 and _PROCES_CURENT_MPG123.poll() is None:
+    """Oprește imediat redarea vocală curentă (Barge-In sigur)."""
+    global _PROCES_CURENT_MPG123, _ESTE_VORBIRE_ACTIVA, _ULTIMA_VORBIRE_FINAL
+    _ANULARE_VORBIRE.set()
+    proc = _PROCES_CURENT_MPG123
+    if proc and proc.poll() is None:
         try:
-            _PROCES_CURENT_MPG123.terminate()
+            proc.terminate()
+            proc.wait(timeout=0.5)
         except Exception:
-            pass
+            try:
+                proc.kill()
+            except Exception:
+                pass
+    _PROCES_CURENT_MPG123 = None
+
     if _MIXER_INITIALIZAT:
         try:
             import pygame
             pygame.mixer.music.stop()
         except Exception:
             pass
+    _ESTE_VORBIRE_ACTIVA = False
+    _ULTIMA_VORBIRE_FINAL = time.monotonic()
 
 
 def _reda_fisier_audio(cale_fisier):
     global _MIXER_INITIALIZAT, _PROCES_CURENT_MPG123
+    if _ANULARE_VORBIRE.is_set():
+        return
 
     if os.name != "nt" and shutil.which("mpg123"):
         _PROCES_CURENT_MPG123 = subprocess.Popen(
@@ -129,45 +156,45 @@ def _reda_fisier_audio(cale_fisier):
 
     pygame.mixer.music.load(cale_fisier)
     pygame.mixer.music.play()
-    while pygame.mixer.music.get_busy():
+    while pygame.mixer.music.get_busy() and not _ANULARE_VORBIRE.is_set():
         time.sleep(0.03)
     pygame.mixer.music.unload()
 
 
 def vorbeste(text, limba="ro"):
-    """
-    Se asigură că volumul sistemului este ridicat la nivelul normal (fără să rămână niciodată pe 25%),
-    sintetizează răspunsul în RAM (/dev/shm) și îl redă tare și clar.
-    """
-    t0 = time.perf_counter()
+    """Sintetizează și redă vocea cu protecție contra auto-declanșării Wake Word-ului."""
+    global _ESTE_VORBIRE_ACTIVA, _ULTIMA_VORBIRE_FINAL
     text_adaptat = _curata_si_adapteaza_text(text, limba=limba)
     if not text_adaptat:
         return
 
-    # Asigurăm volumul tare înainte de fiecare vorbire!
-    try:
-        from brain.abilities.youtube_player import restabileste_volum_normal
-        restabileste_volum_normal()
-    except Exception:
-        pass
+    with _VORBIRE_LOCK:
+        _ANULARE_VORBIRE.clear()
+        _ESTE_VORBIRE_ACTIVA = True
+        t0 = time.perf_counter()
+        cale_temp = _obtine_cale_audio_temp()
+        voce = VOCE_RO if limba == "ro" else VOCE_EN
 
-    voce = VOCE_RO if limba == "ro" else VOCE_EN
-    cale_temp = _obtine_cale_audio_temp()
-
-    try:
-        asyncio.run(_genereaza_fisier_async(text_adaptat, voce, cale_temp))
-        if DEBUG:
-            print(f"[TIMPI DEBUG]: Sinteză TTS gata în {time.perf_counter() - t0:.2f}s -> Redau în boxe...")
-        _reda_fisier_audio(cale_temp)
-    except Exception as e:
-        print(f"[EROARE VOCE]: Nu am putut reda sunetul ({e})")
-    finally:
         try:
-            if os.path.exists(cale_temp):
-                os.remove(cale_temp)
+            from brain.abilities.youtube_player import restabileste_volum_normal
+            restabileste_volum_normal()
         except Exception:
             pass
 
-
-if __name__ == "__main__":
-    vorbeste("Salut! Volumul este acum stabil și puternic la fiecare răspuns!", limba="ro")
+        try:
+            asyncio.run(_genereaza_fisier_async(text_adaptat, voce, cale_temp))
+            if _ANULARE_VORBIRE.is_set():
+                return
+            if DEBUG:
+                logger.info(f"[TIMPI DEBUG]: Sinteză TTS gata în {time.perf_counter() - t0:.2f}s -> Redau în boxe...")
+            _reda_fisier_audio(cale_temp)
+        except Exception as e:
+            logger.error(f"[EROARE VOCE]: Nu am putut reda sunetul ({e})")
+        finally:
+            _ESTE_VORBIRE_ACTIVA = False
+            _ULTIMA_VORBIRE_FINAL = time.monotonic()
+            try:
+                if os.path.exists(cale_temp):
+                    os.remove(cale_temp)
+            except Exception:
+                pass

@@ -6,12 +6,15 @@ import threading
 from datetime import datetime
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
 
+from config import GEMINI_API_KEY, MODEL_PRINCIPAL, MODELE_REZERVA, GEMINI_TIMEOUT_MS, CFG, DEBUG
+from system_health import logger, citeste_stare_hardware
 from brain.abilities.weather import get_weather
 from brain.abilities.wikipedia_ro import cauta_wikipedia, continua_wikipedia
+from brain.abilities.timers import extrage_si_porneste_timer
 from brain.abilities.youtube_player import (
     cauta_youtube_oficial,
+    selecteaza_meta_dupa_numar,
     reda_rezultat_dupa_numar,
     inchide_overlay_youtube,
     piesa_urmatoare,
@@ -20,22 +23,10 @@ from brain.abilities.youtube_player import (
     schimba_volum_relativ
 )
 
-load_dotenv()
-API_KEY = os.getenv("GEMINI_API_KEY")
-DEBUG = os.getenv("DEBUG", "1") == "1"
-
 client = genai.Client(
-    api_key=API_KEY,
-    http_options=types.HttpOptions(timeout=15000)
+    api_key=GEMINI_API_KEY,
+    http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
 )
-
-MODEL_PRINCIPAL = "gemini-3.5-flash"
-MODELE_REZERVA = [
-    "gemini-3.8-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-flash-latest"
-]
 
 instructiuni_sistem = """Ești "Creierul" unui robot companion fizic de birou din Timișoara. Ești prietenos, inteligent, spontan și uneori puțin sarcastic sau glumeț.
 
@@ -56,9 +47,7 @@ REGULI CRITICE DE LIMBĂ ȘI ORTOGRAFIE:
 istoric_conversatie = []
 _istoric_lock = threading.Lock()
 
-ZILE_SAPTAMANA_RO = [
-    "luni", "marți", "miercuri", "joi", "vineri", "sâmbătă", "duminică"
-]
+ZILE_SAPTAMANA_RO = ["luni", "marți", "miercuri", "joi", "vineri", "sâmbătă", "duminică"]
 LUNI_AN_RO = [
     "", "ianuarie", "februarie", "martie", "aprilie", "mai", "iunie",
     "iulie", "august", "septembrie", "octombrie", "noiembrie", "decembrie"
@@ -82,6 +71,11 @@ CUVINTE_MAI_MULT_WIKI = re.compile(
 
 CUVINTE_ORA_DATA = re.compile(
     r"\b(cât e ceasul|cat e ceasul|ce oră e|ce ora e|ce oră este|în ce dată suntem|in ce data suntem|ce zi e azi|ce zi este azi)\b",
+    re.IGNORECASE
+)
+
+CUVINTE_STATUS_SISTEM = re.compile(
+    r"\b(status sistem|stare sistem|cât de cald e procesorul|temperatura procesorului|cât ram ai| diagnostic sistem)\b",
     re.IGNORECASE
 )
 
@@ -165,6 +159,7 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.45, salveaza_istoric=True, t
         continut_apel = list(istoric_conversatie) + [mesaj_user_apel]
 
     toate_modelele = [MODEL_PRINCIPAL] + MODELE_REZERVA
+    max_ist = int(CFG["ai"].get("max_istoric", 8))
 
     for model_curent in toate_modelele:
         try:
@@ -221,7 +216,7 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.45, salveaza_istoric=True, t
             t_total = time.perf_counter() - t0
             if DEBUG:
                 ttft_s = f"{t_first_token:.2f}s" if t_first_token is not None else "N/A"
-                print(f"[TIMPI DEBUG | {model_curent}]: TTFT={ttft_s} | LLM Total={t_total:.2f}s")
+                logger.info(f"[TIMPI DEBUG | {model_curent}]: TTFT={ttft_s} | LLM Total={t_total:.2f}s")
 
             text_final = text_afisat.strip()
             if salveaza_istoric and text_final:
@@ -233,8 +228,8 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.45, salveaza_istoric=True, t
                     istoric_conversatie.append(
                         types.Content(role="model", parts=[types.Part.from_text(text=f"[{actiune}] {text_final}")])
                     )
-                    if len(istoric_conversatie) > 8:
-                        istoric_conversatie = istoric_conversatie[-8:]
+                    if len(istoric_conversatie) > max_ist:
+                        istoric_conversatie = istoric_conversatie[-max_ist:]
 
             return {
                 "actiune": actiune,
@@ -243,14 +238,18 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.45, salveaza_istoric=True, t
             }
 
         except Exception as e:
-            if DEBUG:
-                print(f"[FALLBACK AI]: {model_curent} a eșuat ({e}). Trec imediat pe următorul model...")
+            logger.warning(f"[FALLBACK AI]: {model_curent} a eșuat ({e}). Trec pe următorul model...")
             continue
 
-    aglom = "Conexiunea cu serverele este aglomerată în această clipă. Mai încearcă o dată!"
+    # Mod degradat offline dacă internetul sau toate modelele sunt indisponibile
+    acum = datetime.now()
+    offline_msg = (
+        f"Conexiunea la internet sau la serverele AI este temporar indisponibilă, "
+        f"dar comenzile locale funcționează. Este ora {acum.strftime('%H:%M')}."
+    )
     if on_text_chunk:
-        on_text_chunk(aglom)
-    return {"actiune": "eroare", "parametru": "", "mesaj": aglom}
+        on_text_chunk(offline_msg)
+    return {"actiune": "eroare", "parametru": "", "mesaj": offline_msg}
 
 
 def genereaza_salut_pornire(limba="ro", on_text_chunk=None, on_propozitie=None):
@@ -299,7 +298,14 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
     text_curat = text.strip()
     text_mic = text_curat.lower()
 
-    # 1. QoL: Răspuns instantaneu la Oră și Dată
+    # 1. Timere și Alarme vocale (0.0s latență!)
+    msg_timer = extrage_si_porneste_timer(text_curat)
+    if msg_timer:
+        if on_text_chunk:
+            on_text_chunk(msg_timer)
+        return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg_timer}
+
+    # 2. Oră și Dată locală (0.0s latență!)
     if CUVINTE_ORA_DATA.search(text_mic):
         acum = datetime.now()
         zi_nume = ZILE_SAPTAMANA_RO[acum.weekday()]
@@ -309,7 +315,18 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
             on_text_chunk(msg)
         return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg}
 
-    # 2. QoL: Reglare Volum prin Comandă Vocală
+    # 3. Status Sistem Hardware (0.0s latență!)
+    if CUVINTE_STATUS_SISTEM.search(text_mic):
+        st = citeste_stare_hardware()
+        msg = (
+            f"Temperatura procesorului este de {st['temp_c']}°C, "
+            f"iar memoria liberă este de {st['ram_avail_mb']} megabytes din {st['ram_total_mb']}."
+        )
+        if on_text_chunk:
+            on_text_chunk(msg)
+        return {"actiune": "arata_status", "parametru": "", "mesaj": msg, "date_ui": st}
+
+    # 4. Reglare Volum prin Comandă Vocală
     if any(k in text_mic for k in ("dă mai tare", "da mai tare", "volum mai mare", "volum maxim", "volumul la maxim")):
         vol = seteaza_volum_sistem(100) if "maxim" in text_mic else schimba_volum_relativ(15)
         msg = f"Am ridicat volumul la {vol}%."
@@ -324,7 +341,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
             on_text_chunk(msg)
         return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg}
 
-    # 3. Comenzi rapide de control media
+    # 5. Control Media Rapid
     if CUVINTE_OPRIRE_MEDIA.search(text_mic):
         inchide_overlay_youtube()
         msg = "Am oprit redarea."
@@ -334,7 +351,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
 
     for expresie, nr in CUVINTE_SELECTIE_YT.items():
         if re.search(rf"\b{re.escape(expresie)}\b", text_mic) and len(text_mic.split()) <= 5:
-            ales = reda_rezultat_dupa_numar(nr)
+            ales = selecteaza_meta_dupa_numar(nr)
             if ales:
                 msg = f"Redau acum opțiunea {nr}: {ales['titlu']}."
                 if on_text_chunk:
@@ -357,7 +374,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
                 on_text_chunk(msg)
             return {"actiune": "reda_muzica", "parametru": ales["titlu"], "mesaj": msg, "date_ui": ales}
 
-    # 4. Continuare articol Wikipedia ("Spune-mi mai mult")
+    # 6. Continuare Wikipedia ("Spune-mi mai mult")
     if CUVINTE_MAI_MULT_WIKI.search(text_mic):
         rez_cont = continua_wikipedia()
         msg_cont = rez_cont["mesaj"]
@@ -370,7 +387,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
             "date_ui": rez_cont["date_ui"]
         }
 
-    # 5. Căutare directă Wikipedia când utilizatorul menționează explicit "Wikipedia"
+    # 7. Căutare explicită Wikipedia
     m_wiki = CUVINTE_EXPLICITE_WIKI.search(text_curat)
     if m_wiki:
         subiect_wiki = m_wiki.group(1).strip()
@@ -385,7 +402,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
                 "date_ui": info_wiki
             }
 
-    # 6. One-Shot Weather
+    # 8. One-Shot Weather
     if CUVINTE_CHEIE_METEO.search(text_curat):
         oras_detectat = _detecteaza_oras_rapid(text_curat)
         raport_date = get_weather(oras_detectat)
@@ -404,7 +421,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
         rez["actiune"] = "arata_vreme"
         return rez
 
-    # 7. Apelul principal către Gemini
+    # 9. Apelul principal către Gemini
     raspuns_robot = _stream_de_la_gemini(
         text_curat,
         temperatura=0.45,

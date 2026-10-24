@@ -17,11 +17,18 @@
     "tts_voice_en": "en-US-ChristopherNeural",
     "tts_rate": "+8%",
     "volum_normal": 95,
-    "volum_ducking": 30
+    "volum_ducking": 30,
+    "alsa_card": null
   },
   "microphone": {
     "preferred_device_index": null,
-    "preferred_keywords": ["USB", "Camera", "Webcam", "Audio", "Mic"],
+    "preferred_keywords": [
+      "USB",
+      "Camera",
+      "Webcam",
+      "Audio",
+      "Mic"
+    ],
     "sample_rate": 8000,
     "chunk_size": 512,
     "auto_gain_alsa_percent": 75,
@@ -38,29 +45,69 @@
   "wake_word": {
     "enabled_by_default": true,
     "preferred_strategy": "auto",
-    "strategies_order": ["vosk_phonetic", "openwakeword", "energy_vad_stt"],
+    "strategies_order": [
+      "vosk_phonetic",
+      "openwakeword",
+      "energy_vad_stt"
+    ],
     "sensitivity_rms_ratio": 1.35,
-    "min_trigger_rms": 260,
-    "fuzzy_threshold": 0.72,
+    "min_trigger_rms": 240,
+    "fuzzy_threshold": 0.70,
     "ignore_after_speak_sec": 0.9,
-    "vosk_gain": 3.0,
+    "vosk_gain": 3.2,
+    "telemetry_interval_sec": 5.0,
+    "debug_wake_in_ui": true,
     "custom_triggers": [
-      "robot", "robotul", "robotule", "robote", "robo", "robert", "robbie",
-      "rob", "ropot", "rombot", "raw bought", "row boat", "row bought",
-      "rah bought", "roar boat", "rabat", "rub out", "hey robot", "ok robot"
+      "robot",
+      "robotul",
+      "robotule",
+      "robote",
+      "robo",
+      "robert",
+      "robbie",
+      "rob",
+      "robin",
+      "ropot",
+      "rombot",
+      "raw bought",
+      "row boat",
+      "row bought",
+      "rah bought",
+      "roar boat",
+      "rabat",
+      "rub out",
+      "oh bought",
+      "about",
+      "hey robot",
+      "ok robot",
+      "okay robot",
+      "hi robot",
+      "hello robot"
     ]
   },
   "youtube": {
+    "video_mode": "auto",
+    "video_vo_chain": [
+      "tk_canvas",
+      "x11",
+      "xv",
+      "wlshm",
+      "sdl"
+    ],
     "max_video_height": 360,
-    "max_video_fps": 25,
+    "max_video_fps": 30,
+    "spi_canvas_fps": 12,
     "search_timeout_sec": 6,
-    "ytdlp_timeout_sec": 12,
+    "ytdlp_timeout_sec": 14,
     "cache_ttl_sec": 1800,
-    "prefetch_next": true
+    "prefetch_next": true,
+    "log_errors": true
   },
   "ui": {
-    "debounce_ms": 250,
+    "debounce_ms": 220,
     "clock_refresh_ms": 10000,
-    "health_refresh_ms": 15000
+    "health_refresh_ms": 15000,
+    "min_button_height_px": 36,
+    "dnd_enabled": false
   }
 }

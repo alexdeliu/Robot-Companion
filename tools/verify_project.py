@@ -31,6 +31,9 @@ FISIERE_OBLIGATORII = [
     "brain/abilities/wikipedia_ro.py",
     "brain/abilities/youtube_player.py",
     "brain/abilities/timers.py",
+    "tools/diag_youtube.py",
+    "tools/ui_selftest.py",
+    "tools/wake_eval.py",
 ]
 
 CHEI_CONFIG_OBLIGATORII = {

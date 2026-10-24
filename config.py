@@ -81,6 +81,14 @@ def _imbina_dict(baza, nou):
 
 def incarca_config():
     cfg = json.loads(json.dumps(_DEFAULT_CFG))
+    cfg["youtube"].setdefault("video_mode", "auto")
+    cfg["youtube"].setdefault("video_vo_chain", ["tk_canvas", "x11", "xv", "wlshm", "sdl"])
+    cfg["youtube"].setdefault("spi_canvas_fps", 12)
+    cfg["youtube"].setdefault("log_errors", True)
+    cfg["wake_word"].setdefault("telemetry_interval_sec", 5.0)
+    cfg["wake_word"].setdefault("debug_wake_in_ui", True)
+    cfg["ui"].setdefault("min_button_height_px", 36)
+    cfg["ui"].setdefault("dnd_enabled", False)
     for cale in (CONFIG_JSON_PATH, CONFIG_LOCAL_PATH):
         if os.path.exists(cale):
             try:
@@ -89,6 +97,21 @@ def incarca_config():
             except Exception as e:
                 print(f"[AVERTISMENT CONFIG]: Eroare la citirea {os.path.basename(cale)} ({e}).")
     return cfg
+
+
+def salveaza_config_local(sectiune, cheie, valoare):
+    """Salvează persistent volumul sau starea DND în config.local.json fără a modifica config.json din Git."""
+    try:
+        CFG.setdefault(sectiune, {})[cheie] = valoare
+        date_locale = {}
+        if os.path.exists(CONFIG_LOCAL_PATH):
+            with open(CONFIG_LOCAL_PATH, "r", encoding="utf-8") as f:
+                date_locale = json.load(f)
+        date_locale.setdefault(sectiune, {})[cheie] = valoare
+        with open(CONFIG_LOCAL_PATH, "w", encoding="utf-8") as f:
+            json.dump(date_locale, f, indent=2)
+    except Exception as e:
+        print(f"[AVERTISMENT CONFIG LOCAL]: Nu am putut salva {sectiune}.{cheie}: {e}")
 
 
 CFG = incarca_config()

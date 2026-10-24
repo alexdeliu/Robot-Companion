@@ -61,7 +61,9 @@ def verifica_versiune_ytdlp():
         return "eroare"
 
 
-threading.Thread(target=verifica_versiune_ytdlp, name="YtdlpCheck", daemon=True).start()
+_timer_ytdlp_check = threading.Timer(12.0, verifica_versiune_ytdlp)
+_timer_ytdlp_check.daemon = True
+_timer_ytdlp_check.start()
 
 
 def _detecteaza_controale_alsa():
@@ -224,11 +226,20 @@ def _extrage_stream_direct_ytdlp(video_id, doar_audio=True):
     return None
 
 
+def _curata_cache_dict(cache_dict, ttl_sec, max_intrari=25):
+    acum = time.time()
+    expirate = [k for k, v in list(cache_dict.items()) if acum - v[0] >= ttl_sec]
+    for k in expirate:
+        cache_dict.pop(k, None)
+    while len(cache_dict) > max_intrari:
+        cache_dict.pop(next(iter(cache_dict)), None)
+
+
 def _prefetch_piesa_urmatoare():
     if not CFG["youtube"].get("prefetch_next", True) or len(_ULTIMELE_REZULTATE_YT) < 2:
         return
-    if len(_STREAM_URL_CACHE) > 30:
-        _STREAM_URL_CACHE.clear()
+    _curata_cache_dict(_STREAM_URL_CACHE, ttl_sec=1200, max_intrari=25)
+    _curata_cache_dict(_CAUTARE_CACHE, ttl_sec=int(CFG["youtube"].get("cache_ttl_sec", 1800)), max_intrari=25)
     idx_urm = (_INDEX_CURENT_YT + 1) % len(_ULTIMELE_REZULTATE_YT)
     vid_urm = _ULTIMELE_REZULTATE_YT[idx_urm]["video_id"]
     threading.Thread(
@@ -394,11 +405,19 @@ def _ruleaza_decodare_video_in_canvas(video_url, sesiune_id, on_frame_rgb, latim
     except Exception as e:
         logger.warning(f"[FFMPEG SPI CANVAS]: {e}")
     finally:
-        try:
-            if _PROCES_FFMPEG_VIDEO and _PROCES_FFMPEG_VIDEO.poll() is None:
-                _PROCES_FFMPEG_VIDEO.terminate()
-        except Exception:
-            pass
+        proc_f = _PROCES_FFMPEG_VIDEO
+        if proc_f:
+            for flux in (proc_f.stdout, proc_f.stderr):
+                if flux:
+                    try:
+                        flux.close()
+                    except Exception as e_fl:
+                        logger.debug(f"[FFMPEG PIPE CLOSE]: {e_fl}")
+            if proc_f.poll() is None:
+                try:
+                    proc_f.terminate()
+                except Exception as e_tr:
+                    logger.debug(f"[FFMPEG TERM]: {e_tr}")
 
 
 def deschide_overlay_youtube(video_id, mod_muzica=False, window_id=None, on_frame_rgb=None, on_status_ui=None, dim_video=(320, 180)):

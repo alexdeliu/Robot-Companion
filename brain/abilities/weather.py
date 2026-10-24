@@ -98,6 +98,12 @@ def get_weather(city="Timișoara"):
 
             raport += f"- Data: {data_zi} | Max: {max_t}°C | Min: {min_t}°C | Șanse ploaie: {ploaie}% | Vreme: {conditie_zi}\n"
 
+        if len(_METEO_CACHE) >= 20:
+            expirate = [k for k, v in _METEO_CACHE.items() if acum - v[0] >= _DURATA_CACHE_SEC]
+            for k in expirate:
+                _METEO_CACHE.pop(k, None)
+            if len(_METEO_CACHE) >= 20:
+                _METEO_CACHE.pop(next(iter(_METEO_CACHE)), None)
         _METEO_CACHE[cheie_cache] = (acum, raport)
         return raport
 

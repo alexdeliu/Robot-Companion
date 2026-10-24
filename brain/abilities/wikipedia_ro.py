@@ -140,7 +140,14 @@ def cauta_wikipedia(subiect, limba="ro"):
                     "imagine": info_card["imagine"],
                     "url": info_card["url"]
                 }
-                _WIKI_CACHE[cheie_cache] = (time.time(), info_card)
+                acum_w = time.time()
+                if len(_WIKI_CACHE) >= 15:
+                    exp_w = [k for k, v in _WIKI_CACHE.items() if acum_w - v[0] >= 900]
+                    for k in exp_w:
+                        _WIKI_CACHE.pop(k, None)
+                    if len(_WIKI_CACHE) >= 15:
+                        _WIKI_CACHE.pop(next(iter(_WIKI_CACHE)), None)
+                _WIKI_CACHE[cheie_cache] = (acum_w, info_card)
                 return info_card
 
         except Exception as e:

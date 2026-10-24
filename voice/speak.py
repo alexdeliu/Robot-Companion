@@ -116,19 +116,20 @@ def opreste_voce():
         try:
             proc.terminate()
             proc.wait(timeout=0.5)
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[STOP MPG123 TERM]: {e}")
             try:
                 proc.kill()
-            except Exception:
-                pass
+            except Exception as e2:
+                logger.debug(f"[STOP MPG123 KILL]: {e2}")
     _PROCES_CURENT_MPG123 = None
 
     if _MIXER_INITIALIZAT:
         try:
             import pygame
             pygame.mixer.music.stop()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[STOP PYGAME]: {e}")
     _ESTE_VORBIRE_ACTIVA = False
     _ULTIMA_VORBIRE_FINAL = time.monotonic()
 
@@ -178,8 +179,8 @@ def vorbeste(text, limba="ro"):
         try:
             from brain.abilities.youtube_player import restabileste_volum_normal
             restabileste_volum_normal()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[RESTABILESTE VOLUM TTS]: {e}")
 
         try:
             asyncio.run(_genereaza_fisier_async(text_adaptat, voce, cale_temp))
@@ -196,5 +197,5 @@ def vorbeste(text, limba="ro"):
             try:
                 if os.path.exists(cale_temp):
                     os.remove(cale_temp)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[STERGERE TEMP TTS]: {e}")

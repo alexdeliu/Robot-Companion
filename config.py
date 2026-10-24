@@ -79,8 +79,24 @@ def _imbina_dict(baza, nou):
             baza[k] = v
 
 
+def citeste_versiune():
+    cale_v = os.path.join(BASE_DIR, "VERSION")
+    try:
+        if os.path.exists(cale_v):
+            with open(cale_v, "r", encoding="utf-8") as f:
+                return f.read().strip() or "1.0.0"
+    except Exception:
+        pass
+    return "1.0.0"
+
+
+APP_VERSION = citeste_versiune()
+
+
 def incarca_config():
     cfg = json.loads(json.dumps(_DEFAULT_CFG))
+    cfg["ai"].setdefault("auto_retry_network", False)
+    cfg["microphone"].setdefault("save_debug_wav", False)
     cfg["youtube"].setdefault("video_mode", "auto")
     cfg["youtube"].setdefault("video_vo_chain", ["tk_canvas", "x11", "xv", "wlshm", "sdl"])
     cfg["youtube"].setdefault("spi_canvas_fps", 12)
@@ -89,6 +105,7 @@ def incarca_config():
     cfg["wake_word"].setdefault("debug_wake_in_ui", True)
     cfg["ui"].setdefault("min_button_height_px", 36)
     cfg["ui"].setdefault("dnd_enabled", False)
+    cfg["ui"].setdefault("adaptive_idle_polling", False)
     for cale in (CONFIG_JSON_PATH, CONFIG_LOCAL_PATH):
         if os.path.exists(cale):
             try:

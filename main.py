@@ -8,7 +8,7 @@ import tkinter.font as tkfont
 from tkinter import scrolledtext
 import threading
 
-from config import CFG, salveaza_config_local
+from config import CFG, salveaza_config_local, APP_VERSION
 from system_health import logger, MonitorSanatatePi, citeste_stare_hardware
 from brain.ai_brain import (
     proceseaza_comanda_ai,
@@ -317,13 +317,18 @@ class RobotCompanionUI:
     def _actualizeaza_ceas(self):
         if self.inchidere_aplicatie:
             return
-        self.lbl_ceas.config(text=datetime.now().strftime("%H:%M"))
+        ora_noua = datetime.now().strftime("%H:%M")
+        if self.lbl_ceas.cget("text") != ora_noua:
+            self.lbl_ceas.config(text=ora_noua)
+        interval_ms = int(CFG["ui"].get("clock_refresh_ms", 10000))
         if self.stare == RobotState.IDLE:
             self._idx_fata = (self._idx_fata + 1) % len(FETE_IDLE)
             st_hw = self.monitor_sanatate.ultima_stare
             temp_txt = f"{int(st_hw['temp_c'])}°C" if st_hw["temp_c"] > 0 else "OK"
             self.btn_status.config(text=f"{FETE_IDLE[self._idx_fata]} {temp_txt}")
-        self.root.after(int(CFG["ui"].get("clock_refresh_ms", 10000)), self._actualizeaza_ceas)
+            if CFG["ui"].get("adaptive_idle_polling", False) and st_hw["temp_c"] >= 70.0:
+                interval_ms = max(interval_ms, 25000)
+        self.root.after(interval_ms, self._actualizeaza_ceas)
 
     def _declanseaza_alarma_timer(self, mesaj_alarma):
         def _afis():
@@ -391,7 +396,7 @@ class RobotCompanionUI:
         btn_close.pack(side="right", padx=4, pady=2)
 
         tk.Label(
-            bara, text="STATUS HARDWARE & AUDIO",
+            bara, text=f"STATUS HARDWARE & AUDIO (v{APP_VERSION})",
             font=("Arial", 10, "bold"), bg="#282C34", fg="#E5C07B", anchor="w"
         ).pack(side="left", fill="x", expand=True, padx=6, pady=2)
 

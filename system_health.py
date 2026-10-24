@@ -73,20 +73,18 @@ def citeste_stare_hardware():
         "avertismente": []
     }
 
-    # Temperatură CPU Linux
     try:
         cale_temp = "/sys/class/thermal/thermal_zone0/temp"
         if os.path.exists(cale_temp):
-            with open(cale_temp, "r") as f:
+            with open(cale_temp, "r", encoding="utf-8") as f:
                 stare["temp_c"] = round(int(f.read().strip()) / 1000.0, 1)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[HEALTH TEMP]: {e}")
 
-    # Memorie RAM (/proc/meminfo)
     try:
         if os.path.exists("/proc/meminfo"):
             mem = {}
-            with open("/proc/meminfo", "r") as f:
+            with open("/proc/meminfo", "r", encoding="utf-8") as f:
                 for line in f:
                     parts = line.split(":")
                     if len(parts) == 2:
@@ -99,14 +97,12 @@ def citeste_stare_hardware():
             stare["ram_avail_mb"] = avail
             if tot > 0:
                 stare["ram_procent"] = int(((tot - avail) / tot) * 100)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[HEALTH RAM]: {e}")
 
-    # Undervoltage & Throttling prin vcgencmd
     if os.name != "nt" and shutil.which("vcgencmd"):
         try:
             out = subprocess.check_output(["vcgencmd", "get_throttled"], timeout=2, text=True).strip()
-            # Format: throttled=0x50000
             if "=" in out:
                 hex_str = out.split("=")[1].strip()
                 stare["throttled_hex"] = hex_str
@@ -114,8 +110,8 @@ def citeste_stare_hardware():
                 stare["undervoltage_acum"] = bool(val & 0x1)
                 stare["throttled_acum"] = bool(val & 0x4)
                 stare["undervoltage_trecut"] = bool(val & 0x10000)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[HEALTH VCGENCMD]: {e}")
 
     if stare["temp_c"] >= 78.0:
         stare["avertismente"].append(f"Temperatură CPU ridicată: {stare['temp_c']}°C")
@@ -142,7 +138,15 @@ class MonitorSanatatePi:
         self._thread.start()
 
     def stop(self):
+        global _fault_fp
         self._stop_evt.set()
+        if _fault_fp is not None:
+            try:
+                faulthandler.disable()
+                _fault_fp.close()
+            except Exception as e:
+                logger.debug(f"[FAULTHANDLER CLOSE]: {e}")
+            _fault_fp = None
 
     def _loop(self):
         while not self._stop_evt.is_set():

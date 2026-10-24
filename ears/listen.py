@@ -91,8 +91,8 @@ def _regleaza_gain_hardware_alsa(card_index=None):
                     stderr=subprocess.DEVNULL,
                     timeout=1.5
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[ALSA MIC GAIN card {c} {ctrl}]: {e}")
 
 
 def calculeaza_rms_pcm16(raw_bytes):
@@ -352,7 +352,7 @@ def asculta_voce(on_status=None):
             t_stt = time.perf_counter()
             audio_curat = _curata_si_amplifica_vocea(audio_brut)
 
-            if DEBUG:
+            if CFG["microphone"].get("save_debug_wav", False):
                 cale_debug = "/dev/shm/debug.wav" if os.path.isdir("/dev/shm") else "debug.wav"
                 with open(cale_debug, "wb") as f:
                     f.write(audio_curat.get_wav_data())

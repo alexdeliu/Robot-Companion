@@ -7,7 +7,7 @@ from datetime import datetime
 from google import genai
 from google.genai import types
 
-from config import GEMINI_API_KEY, MODEL_PRINCIPAL, MODELE_REZERVA, GEMINI_TIMEOUT_MS, CFG, DEBUG
+from config import GEMINI_API_KEY, MODEL_PRINCIPAL, MODELE_REZERVA, GEMINI_TIMEOUT_MS, CFG, DEBUG, APP_VERSION
 from system_health import logger, citeste_stare_hardware
 from brain.abilities.weather import get_weather
 from brain.abilities.wikipedia_ro import cauta_wikipedia, continua_wikipedia
@@ -23,10 +23,21 @@ from brain.abilities.youtube_player import (
     schimba_volum_relativ
 )
 
-client = genai.Client(
-    api_key=GEMINI_API_KEY,
-    http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
-)
+_client_gemini = None
+
+
+def _obtine_client_gemini():
+    global _client_gemini
+    if _client_gemini is not None:
+        return _client_gemini
+    cheie = GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "").strip()
+    if not cheie or "PUNE_CHEIA" in cheie:
+        raise RuntimeError("GEMINI_API_KEY lipsește din .env")
+    _client_gemini = genai.Client(
+        api_key=cheie,
+        http_options=types.HttpOptions(timeout=GEMINI_TIMEOUT_MS)
+    )
+    return _client_gemini
 
 instructiuni_sistem = """Ești "Creierul" unui robot companion fizic de birou din Timișoara. Ești prietenos, inteligent, spontan și uneori puțin sarcastic sau glumeț.
 
@@ -140,7 +151,14 @@ def _deschide_stream_model(model_curent, continut_apel, temperatura):
             max_output_tokens=280,
             thinking_config=types.ThinkingConfig(thinking_budget=0)
         )
-    return client.models.generate_content_stream(
+    cli = _obtine_client_gemini()
+    if CFG["ai"].get("auto_retry_network", False):
+        try:
+            return cli.models.generate_content_stream(model=model_curent, contents=continut_apel, config=cfg)
+        except Exception as e_net:
+            logger.warning(f"[RETRY REȚEA {model_curent}]: {e_net}, reîncerc în 1.2s...")
+            time.sleep(1.2)
+    return cli.models.generate_content_stream(
         model=model_curent,
         contents=continut_apel,
         config=cfg
@@ -316,10 +334,10 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
         return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg}
 
     # 3. Status Sistem Hardware (0.0s latență!)
-    if CUVINTE_STATUS_SISTEM.search(text_mic):
+    if CUVINTE_STATUS_SISTEM.search(text_mic) or "ce versiune" in text_mic:
         st = citeste_stare_hardware()
         msg = (
-            f"Temperatura procesorului este de {st['temp_c']}°C, "
+            f"Rulez versiunea {APP_VERSION}. Temperatura procesorului este de {st['temp_c']}°C, "
             f"iar memoria liberă este de {st['ram_avail_mb']} megabytes din {st['ram_total_mb']}."
         )
         if on_text_chunk:

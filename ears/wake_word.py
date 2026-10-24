@@ -56,8 +56,8 @@ def _notifica_ui_wake(text_status):
     if _CALLBACK_DEBUG_UI and CFG.get("wake_word", {}).get("debug_wake_in_ui", True):
         try:
             _CALLBACK_DEBUG_UI(text_status)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug(f"[WAKE UI CALLBACK]: {e}")
 
 
 def _obtine_lista_declansare():
@@ -231,8 +231,8 @@ def _este_robotul_in_vorbire():
         cooldown = float(CFG.get("wake_word", {}).get("ignore_after_speak_sec", 0.9))
         if este_vorbire_activa() or timp_de_la_ultima_vorbire() < cooldown:
             return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[WAKE SPEAK CHECK]: {e}")
     return False
 
 

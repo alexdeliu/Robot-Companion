@@ -10,7 +10,8 @@
     ],
     "timeout_ms": 15000,
     "temperatura": 0.45,
-    "max_istoric": 8
+    "max_istoric": 8,
+    "auto_retry_network": false
   },
   "audio_out": {
     "tts_voice_ro": "ro-RO-EmilNeural",
@@ -40,7 +41,8 @@
     "max_energy_threshold": 3200,
     "pause_threshold": 0.85,
     "phrase_time_limit": 10.0,
-    "listen_timeout": 6.0
+    "listen_timeout": 6.0,
+    "save_debug_wav": false
   },
   "wake_word": {
     "enabled_by_default": true,
@@ -108,6 +110,7 @@
     "clock_refresh_ms": 10000,
     "health_refresh_ms": 15000,
     "min_button_height_px": 36,
-    "dnd_enabled": false
+    "dnd_enabled": false,
+    "adaptive_idle_polling": false
   }
 }

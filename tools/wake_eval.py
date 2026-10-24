@@ -10,6 +10,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+from system_health import logger
 from ears.listen import calculeaza_rms_pcm16, proceseaza_semnal_microfon_slab
 from ears.wake_word import (
     _incarca_vosk,
@@ -61,8 +62,8 @@ def evalueaza_fisier_wav(cale_wav, model_vosk, rec_stt):
         aud = sr.AudioData(proc, rata, 2)
         stt_txt = rec_stt.recognize_google(aud, language="ro-RO").strip().lower()
         stt_trig = potrivire_fuzzy_robot(stt_txt)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[WAKE EVAL STT {os.path.basename(cale_wav)}]: {e}")
     lat_stt_ms = int((time.perf_counter() - t1) * 1000)
 
     return {

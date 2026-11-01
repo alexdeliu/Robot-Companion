@@ -6,9 +6,13 @@ import json
 WMO_CODES = {
     0: "Senin", 1: "Mai mult senin", 2: "Parțial înnorat", 3: "Înnorat",
     45: "Ceață", 48: "Ceață cu îngheț", 51: "Burniță ușoară", 53: "Burniță", 55: "Burniță densă",
+    56: "Burniță înghețată ușoară", 57: "Burniță înghețată densă",
     61: "Ploaie ușoară", 63: "Ploaie moderată", 65: "Ploaie torențială",
-    71: "Ninsoare ușoară", 73: "Ninsoare moderată", 75: "Ninsoare abundentă",
-    95: "Furtună cu descărcări electrice", 96: "Furtună cu grindină"
+    66: "Ploaie înghețată ușoară", 67: "Ploaie înghețată abundentă",
+    71: "Ninsoare ușoară", 73: "Ninsoare moderată", 75: "Ninsoare abundentă", 77: "Zăpadă grăunțoasă",
+    80: "Averse ușoare de ploaie", 81: "Averse moderate de ploaie", 82: "Averse violente de ploaie",
+    85: "Averse ușoare de ninsoare", 86: "Averse puternice de ninsoare",
+    95: "Furtună cu descărcări electrice", 96: "Furtună cu grindină", 99: "Furtună cu grindină puternică"
 }
 
 # Coordonate pre-salvate pentru a elimina primul apel HTTP (Geocoding) pentru orașele frecvente

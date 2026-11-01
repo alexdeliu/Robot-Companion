@@ -122,11 +122,19 @@ def salveaza_config_local(sectiune, cheie, valoare):
         CFG.setdefault(sectiune, {})[cheie] = valoare
         date_locale = {}
         if os.path.exists(CONFIG_LOCAL_PATH):
-            with open(CONFIG_LOCAL_PATH, "r", encoding="utf-8") as f:
-                date_locale = json.load(f)
+            try:
+                with open(CONFIG_LOCAL_PATH, "r", encoding="utf-8") as f:
+                    date_locale = json.load(f)
+            except ValueError as e:
+                print(f"[AVERTISMENT CONFIG LOCAL]: Fișier corupt, îl recreez: {e}")
         date_locale.setdefault(sectiune, {})[cheie] = valoare
-        with open(CONFIG_LOCAL_PATH, "w", encoding="utf-8") as f:
+        # Scriere atomică: o cădere de tensiune în timpul salvării nu poate trunchia fișierul
+        cale_tmp = f"{CONFIG_LOCAL_PATH}.tmp"
+        with open(cale_tmp, "w", encoding="utf-8") as f:
             json.dump(date_locale, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(cale_tmp, CONFIG_LOCAL_PATH)
     except Exception as e:
         print(f"[AVERTISMENT CONFIG LOCAL]: Nu am putut salva {sectiune}.{cheie}: {e}")
 

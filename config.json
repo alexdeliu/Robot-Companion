@@ -1,11 +1,11 @@
 {
   "debug": true,
   "ai": {
-    "model_principal": "gemini-3.5-flash",
+    "model_principal": "gemini-3.6-flash",
     "modele_rezerva": [
-      "gemini-3.8-flash",
-      "gemini-3.5-flash-lite",
       "gemini-3.1-flash-lite",
+      "gemini-3.5-flash-lite",
+      "gemini-3.8-flash",
       "gemini-flash-latest"
     ],
     "timeout_ms": 15000,
@@ -57,7 +57,7 @@
     "fuzzy_threshold": 0.70,
     "ignore_after_speak_sec": 0.9,
     "vosk_gain": 3.2,
-    "telemetry_interval_sec": 5.0,
+    "telemetry_interval_sec": 60.0,
     "debug_wake_in_ui": true,
     "custom_triggers": [
       "robot",

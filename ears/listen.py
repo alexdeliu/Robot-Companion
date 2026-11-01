@@ -303,11 +303,16 @@ def _apel_stt_cu_retry(audio_curat, limba):
         try:
             rez = recognizer.recognize_google(audio_curat, language=limba, show_all=True)
             return _extrage_cel_mai_bun_text(rez)
-        except sr.RequestError:
+        except sr.UnknownValueError:
+            logger.debug(f"[STT {limba}]: Nicio transcriere pentru acest audio.")
+            break
+        except sr.RequestError as e:
+            logger.warning(f"[STT {limba}]: Eroare de rețea sau API la încercarea {incercare + 1}: {e}")
             if incercare == 0:
                 time.sleep(0.2)
                 continue
-        except Exception:
+        except Exception as e:
+            logger.warning(f"[STT {limba}]: {type(e).__name__}: {e}")
             break
     return None, 0.0
 

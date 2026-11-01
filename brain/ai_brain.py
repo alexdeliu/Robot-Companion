@@ -10,7 +10,7 @@ from google.genai import types
 from config import GEMINI_API_KEY, MODEL_PRINCIPAL, MODELE_REZERVA, GEMINI_TIMEOUT_MS, CFG, DEBUG, APP_VERSION
 from system_health import logger, citeste_stare_hardware
 from brain.abilities.weather import get_weather
-from brain.abilities.wikipedia_ro import cauta_wikipedia, continua_wikipedia
+from brain.abilities.wikipedia_ro import cauta_wikipedia, continua_wikipedia, articol_deschis_recent
 from brain.abilities.timers import extrage_si_porneste_timer
 from brain.abilities.youtube_player import (
     cauta_youtube_oficial,
@@ -81,7 +81,9 @@ CUVINTE_MAI_MULT_WIKI = re.compile(
 )
 
 CUVINTE_ORA_DATA = re.compile(
-    r"\b(cât e ceasul|cat e ceasul|ce oră e|ce ora e|ce oră este|în ce dată suntem|in ce data suntem|ce zi e azi|ce zi este azi)\b",
+    r"\b(cât e ceasul|cat e ceasul|cât e ora|cat e ora|cât este ora|cat este ora|spune[- ]mi ora|ce oră e|ce ora e|ce oră este|"
+    r"în ce dată suntem|in ce data suntem|în ce zi suntem|in ce zi suntem|ce dată e azi|ce data e azi|ce dată este azi|"
+    r"ce zi e azi|ce zi este azi)\b",
     re.IGNORECASE
 )
 
@@ -98,10 +100,22 @@ CUVINTE_SELECTIE_YT = {
     "al cincilea": 5, "a cincea": 5, "cinci": 5, "numărul 5": 5, "numarul 5": 5, "varianta 5": 5,
 }
 
+# Selecția vocală e permisă doar scurt timp după afișarea listei, ca frazele normale să nu pornească un video
+SECUNDE_SELECTIE_YT = 180
+_TS_LISTA_YT = None
+
 CUVINTE_OPRIRE_MEDIA = re.compile(
     r"\b(oprește muzica|opreste muzica|oprește videoclipul|opreste video|închide youtube|inchide youtube|stop youtube|oprește youtube|oprește-te|taci)\b",
     re.IGNORECASE
 )
+
+# Cereri de redare sau căutare în care un cuvânt ca „soare” sau „rain” e titlu, nu întrebare despre vreme
+CUVINTE_CERERE_MEDIA = re.compile(
+    r"^(?:pune|pornește|porneste|redă|reda|cântă|canta|ascultă|asculta|caută|cauta|vreau să ascult|vreau sa ascult)\b",
+    re.IGNORECASE
+)
+
+CUVINTE_METEO_SIGURE = re.compile(r"\b(vreme\w*|prognoz\w*|meteo)\b", re.IGNORECASE)
 
 ORASE_CUNOSCUTE = [
     "timișoara", "timisoara", "bucurești", "bucuresti", "cluj", "iași", "iasi",
@@ -122,6 +136,19 @@ def reseteaza_memorie_ai():
     global istoric_conversatie
     with _istoric_lock:
         istoric_conversatie.clear()
+
+
+def _selectie_yt_activa():
+    return _TS_LISTA_YT is not None and time.monotonic() - _TS_LISTA_YT <= SECUNDE_SELECTIE_YT
+
+
+def _formateaza_ora_vorbita(ora, minut):
+    if minut == 0:
+        return f"{ora} fix"
+    if minut == 1:
+        return f"{ora} și un minut"
+    de = "de " if minut >= 20 else ""
+    return f"{ora} și {minut} {de}minute"
 
 
 def _detecteaza_oras_rapid(text):
@@ -200,7 +227,9 @@ def _stream_de_la_gemini(prompt_text, temperatura=0.45, salveaza_istoric=True, t
                 buffer_complet += bucata
 
                 if not tag_parsat:
-                    if "]" in buffer_complet or len(buffer_complet) > 40:
+                    # Un tag cu termen de căutare lung poate depăși 40 de caractere înainte să sosească "]"
+                    tag_incomplet = buffer_complet.lstrip().startswith("[") and len(buffer_complet) <= 200
+                    if "]" in buffer_complet or (len(buffer_complet) > 40 and not tag_incomplet):
                         m = _REGEX_TAG.match(buffer_complet)
                         if m:
                             actiune = m.group(1).strip().lower()
@@ -313,6 +342,7 @@ genereaza_mesaj_bun_venit = genereaza_salut_pornire
 
 
 def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=None):
+    global _TS_LISTA_YT
     text_curat = text.strip()
     text_mic = text_curat.lower()
 
@@ -328,7 +358,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
         acum = datetime.now()
         zi_nume = ZILE_SAPTAMANA_RO[acum.weekday()]
         luna_nume = LUNI_AN_RO[acum.month]
-        msg = f"Este ora {acum.hour} și {acum.minute:02d} minute. Astăzi este {zi_nume}, {acum.day} {luna_nume} {acum.year}."
+        msg = f"Este ora {_formateaza_ora_vorbita(acum.hour, acum.minute)}. Astăzi este {zi_nume}, {acum.day} {luna_nume} {acum.year}."
         if on_text_chunk:
             on_text_chunk(msg)
         return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg}
@@ -367,19 +397,21 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
             on_text_chunk(msg)
         return {"actiune": "opreste_media", "parametru": "", "mesaj": msg}
 
-    for expresie, nr in CUVINTE_SELECTIE_YT.items():
-        if re.search(rf"\b{re.escape(expresie)}\b", text_mic) and len(text_mic.split()) <= 5:
-            ales = selecteaza_meta_dupa_numar(nr)
-            if ales:
-                msg = f"Redau acum opțiunea {nr}: {ales['titlu']}."
-                if on_text_chunk:
-                    on_text_chunk(msg)
-                return {"actiune": "selecteaza_youtube", "parametru": str(nr), "mesaj": msg, "date_ui": ales}
+    if _selectie_yt_activa():
+        for expresie, nr in CUVINTE_SELECTIE_YT.items():
+            if re.search(rf"\b{re.escape(expresie)}\b", text_mic) and len(text_mic.split()) <= 5:
+                ales = selecteaza_meta_dupa_numar(nr)
+                if ales:
+                    _TS_LISTA_YT = None
+                    msg = f"Redau acum opțiunea {nr}."
+                    if on_text_chunk:
+                        on_text_chunk(msg)
+                    return {"actiune": "selecteaza_youtube", "parametru": str(nr), "mesaj": msg, "date_ui": ales}
 
     if any(k in text_mic for k in ("următoarea melodie", "urmatoarea melodie", "piesa următoare", "next song")):
         ales = piesa_urmatoare()
         if ales:
-            msg = f"Trec la următoarea piesă: {ales['titlu']}."
+            msg = "Trec la următoarea piesă."
             if on_text_chunk:
                 on_text_chunk(msg)
             return {"actiune": "reda_muzica", "parametru": ales["titlu"], "mesaj": msg, "date_ui": ales}
@@ -387,13 +419,13 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
     if any(k in text_mic for k in ("melodia anterioară", "piesa anterioară", "previous song")):
         ales = piesa_anterioara()
         if ales:
-            msg = f"Revin la piesa anterioară: {ales['titlu']}."
+            msg = "Revin la piesa anterioară."
             if on_text_chunk:
                 on_text_chunk(msg)
             return {"actiune": "reda_muzica", "parametru": ales["titlu"], "mesaj": msg, "date_ui": ales}
 
     # 6. Continuare Wikipedia ("Spune-mi mai mult")
-    if CUVINTE_MAI_MULT_WIKI.search(text_mic):
+    if CUVINTE_MAI_MULT_WIKI.search(text_mic) and articol_deschis_recent():
         rez_cont = continua_wikipedia()
         msg_cont = rez_cont["mesaj"]
         if on_text_chunk:
@@ -421,7 +453,8 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
             }
 
     # 8. One-Shot Weather
-    if CUVINTE_CHEIE_METEO.search(text_curat):
+    cerere_media = CUVINTE_CERERE_MEDIA.search(text_curat) and not CUVINTE_METEO_SIGURE.search(text_curat)
+    if CUVINTE_CHEIE_METEO.search(text_curat) and not cerere_media:
         oras_detectat = _detecteaza_oras_rapid(text_curat)
         raport_date = get_weather(oras_detectat)
         prompt_direct = (
@@ -507,15 +540,14 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
                 on_text_chunk(msg)
             return {"actiune": "vorbeste_normal", "parametru": cautare, "mesaj": msg}
 
-        t1 = rezultate[0]["titlu"]
-        t2 = rezultate[1]["titlu"] if len(rezultate) > 1 else ""
+        nr_gasite = "un rezultat" if len(rezultate) == 1 else f"{len(rezultate)} rezultate"
         msg_lista = (
-            f"Am găsit 5 rezultate pe YouTube pentru {cautare}. "
-            f"Primul este {t1}" + (f", iar al doilea este {t2}. " if t2 else ". ") +
+            f"Am găsit {nr_gasite} pe YouTube pentru {cautare}. "
             "Spune-mi numărul dorit sau apasă pe ecran!"
         )
         if not raspuns_robot.get("mesaj") and on_text_chunk:
             on_text_chunk(msg_lista)
+        _TS_LISTA_YT = time.monotonic()
         return {
             "actiune": "reda_youtube",
             "parametru": cautare,
@@ -524,6 +556,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
         }
 
     if actiune == "reda_muzica":
+        _TS_LISTA_YT = None
         cautare = parametru if parametru else "hituri românești"
         rezultate = cauta_youtube_oficial(cautare, doar_muzica=True, max_rezultate=5)
         if not rezultate:
@@ -533,7 +566,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
             return {"actiune": "vorbeste_normal", "parametru": cautare, "mesaj": msg}
 
         prima_piesa = rezultate[0]
-        msg_muzica = raspuns_robot.get("mesaj") or f"Redau acum {prima_piesa['titlu']} de la {prima_piesa['canal']}."
+        msg_muzica = raspuns_robot.get("mesaj") or "Pornesc muzica."
         if not raspuns_robot.get("mesaj") and on_text_chunk:
             on_text_chunk(msg_muzica)
         return {

@@ -221,7 +221,7 @@ def ruleaza_verificare():
     # 6. Verificări specifice Raspberry Pi
     este_linux_arm = (platform.system() == "Linux") and any(a in platform.machine().lower() for a in ("arm", "aarch64"))
     if este_linux_arm:
-        for utilitar in ("mpv", "ffmpeg", "mpg123", "amixer", "arecord", "aplay"):
+        for utilitar in ("mpv", "ffmpeg", "mpg123", "flac", "amixer", "arecord", "aplay"):
             if shutil.which(utilitar):
                 ok_list.append(f"Utilitar Linux găsit: {utilitar}")
             else:

@@ -19,6 +19,7 @@ env/
 *.env
 !.env.example
 config.local.json
+config.local.json.tmp
 
 # Loguri, fișiere audio temporare și modele vocale descărcate
 logs/

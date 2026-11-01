@@ -2,6 +2,8 @@
 Description=Robot Companion AI Kiosk Service
 After=network-online.target sound.target graphical.target
 Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=10
 
 [Service]
 Type=simple
@@ -11,14 +13,14 @@ WorkingDirectory=/home/alex/Robot-Companion
 Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/home/alex/.Xauthority"
 Environment="PYTHONUNBUFFERED=1"
-ExecStartPre=/bin/sh -c 'pkill -f "mpv --no-terminal" || true'
+Environment="XDG_RUNTIME_DIR=/run/user/1000"
+Environment="PATH=/home/alex/Robot-Companion/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ExecStartPre=-/usr/bin/pkill -x mpv
 ExecStart=/home/alex/Robot-Companion/venv/bin/python /home/alex/Robot-Companion/main.py
 Restart=on-failure
 RestartSec=4
-StartLimitIntervalSec=120
-StartLimitBurst=5
-StandardOutput=append:/home/alex/Robot-Companion/logs/systemd.log
-StandardError=append:/home/alex/Robot-Companion/logs/systemd.log
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=graphical.target

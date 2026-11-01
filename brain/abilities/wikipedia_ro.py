@@ -10,16 +10,18 @@ _ULTIMUL_ARTICOL = {
     "paragrafe": [],
     "index": 0,
     "imagine": "",
-    "url": ""
+    "url": "",
+    "ts": 0.0
 }
 
 HEADERS_WIKI = {
     "User-Agent": "RobotCompanionPi/2.0 (Timisoara; Educational Python Project)"
 }
 
-# Împarte în propoziții, dar ignoră abrevierile uzuale (n., d., sec., nr., cca., șt., dr., etc.)
+# Împarte în propoziții, dar ignoră abrevierile uzuale (n., d., sec., nr., cca., dr., Sf.) și inițialele (I. L. Caragiale)
 _REGEX_SPLIT_WIKI = re.compile(
-    r"(?<!\bn)(?<!\bd)(?<!\bsec)(?<!\bnr)(?<!\bcca)(?<!\bdr)(?<!\bprof)(?<!\bart)(?<!\bvol)"
+    r"(?<!\bn\.)(?<!\bd\.)(?<!\bsec\.)(?<!\bnr\.)(?<!\bcca\.)(?<!\bdr\.)(?<!\bDr\.)"
+    r"(?<!\bprof\.)(?<!\bProf\.)(?<!\bart\.)(?<!\bvol\.)(?<!\bSf\.)(?<!\b[A-ZĂÂÎȘȚ]\.)"
     r"(?<=[.!?])\s+(?=[A-ZĂÂÎȘȚ0-9])"
 )
 
@@ -77,7 +79,8 @@ def cauta_wikipedia(subiect, limba="ro"):
             "paragrafe": info_salvat["toate_partile"],
             "index": 1,
             "imagine": info_salvat["imagine"],
-            "url": info_salvat["url"]
+            "url": info_salvat["url"],
+            "ts": time.time()
         }
         return info_salvat
 
@@ -138,7 +141,8 @@ def cauta_wikipedia(subiect, limba="ro"):
                     "paragrafe": fragmente,
                     "index": 1,
                     "imagine": info_card["imagine"],
-                    "url": info_card["url"]
+                    "url": info_card["url"],
+                    "ts": time.time()
                 }
                 acum_w = time.time()
                 if len(_WIKI_CACHE) >= 15:
@@ -157,6 +161,13 @@ def cauta_wikipedia(subiect, limba="ro"):
     return {"eroare": f"Nu am găsit niciun articol pe Wikipedia despre {termen}."}
 
 
+def articol_deschis_recent(max_sec=600):
+    """True dacă există un articol citit în ultimele max_sec secunde, ca 'continuă' să nu fie deturnat de Wikipedia."""
+    if not _ULTIMUL_ARTICOL["titlu"] or not _ULTIMUL_ARTICOL["paragrafe"]:
+        return False
+    return time.time() - _ULTIMUL_ARTICOL["ts"] <= max_sec
+
+
 def continua_wikipedia():
     """Returnează următorul fragment din articolul curent și metadatele actualizate pentru Cardul UI."""
     global _ULTIMUL_ARTICOL
@@ -164,6 +175,7 @@ def continua_wikipedia():
         msg = "Nu avem niciun articol Wikipedia deschis în acest moment."
         return {"mesaj": msg, "date_ui": None}
 
+    _ULTIMUL_ARTICOL["ts"] = time.time()
     idx = _ULTIMUL_ARTICOL["index"]
     total = len(_ULTIMUL_ARTICOL["paragrafe"])
 

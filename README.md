@@ -45,7 +45,7 @@ cd ~
 git clone https://github.com/alexdeliu/Robot-Companion.git
 cd Robot-Companion
 sudo apt-get update
-sudo apt-get install -y mpv ffmpeg mpg123 alsa-utils portaudio19-dev libjpeg-dev zlib1g-dev \
+sudo apt-get install -y mpv ffmpeg mpg123 flac alsa-utils portaudio19-dev libjpeg-dev zlib1g-dev \
     python3-venv python3-dev python3-pil.imagetk dos2unix
 
 # 2. Create virtual environment & install Python packages
@@ -101,7 +101,7 @@ cd ~
 git clone https://github.com/alexdeliu/Robot-Companion.git
 cd Robot-Companion
 sudo apt-get update
-sudo apt-get install -y mpv ffmpeg mpg123 alsa-utils portaudio19-dev libjpeg-dev zlib1g-dev \
+sudo apt-get install -y mpv ffmpeg mpg123 flac alsa-utils portaudio19-dev libjpeg-dev zlib1g-dev \
     python3-venv python3-dev python3-pil.imagetk dos2unix
 
 # 2. Creare mediu virtual Python și instalare dependențe

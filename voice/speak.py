@@ -60,7 +60,11 @@ def _incarca_dictionar():
 
 _PERECHI_PRONUNTIE = _incarca_dictionar()
 
+# Vocea citește emoji cu voce tare („figură cu lacrimi de bucurie”), deci le scoatem din text
+_REGEX_EMOJI = re.compile("\\s*[\U0001F000-\U0001FAFF\u2300-\u23FF\u2600-\u27BF\u2B00-\u2BFF\uFE0F\u200D\u20E3]+")
+
 _ABREVIERI_RO = [
+    (re.compile(r"(?<![\d.])(\d+)\.(\d{1,2})(?=\s*(?:°|%|grade\b))", re.IGNORECASE), r"\1,\2"),
     (re.compile(r"(?<!\w)-(\d+(?:[.,]\d+)?)\s*°\s*C\b", re.IGNORECASE), r"minus \1 grade Celsius"),
     (re.compile(r"(\d+(?:[.,]\d+)?)\s*°\s*C\b", re.IGNORECASE), r"\1 grade Celsius"),
     (re.compile(r"(?<!\w)-(\d+(?:[.,]\d+)?)\s*°", re.IGNORECASE), r"minus \1 grade "),
@@ -90,6 +94,7 @@ def _curata_si_adapteaza_text(text, limba="ro"):
     text_curat = re.sub(r"\b([a-zăâîșțA-ZĂÂÎȘȚ]{1,3})\s*-\s*([a-zăâîșțA-ZĂÂÎȘȚ]+)\b", r"\1-\2", text_curat)
     text_curat = re.sub(r"^\s*\[[^\]]+\]\s*", "", text_curat)
     text_curat = re.sub(r"[\*\#\_\`\~]", "", text_curat)
+    text_curat = _REGEX_EMOJI.sub("", text_curat)
 
     if limba == "ro":
         for regex_abrev, inlocuire in _ABREVIERI_RO:

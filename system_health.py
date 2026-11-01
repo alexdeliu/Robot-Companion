@@ -22,10 +22,12 @@ if not logger.handlers:
     fmt = logging.Formatter("%(asctime)s [%(levelname)s] (%(threadName)s) %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
     fh = RotatingFileHandler(LOG_FILE, maxBytes=2 * 1024 * 1024, backupCount=3, encoding="utf-8")
     fh.setFormatter(fmt)
-    sh = logging.StreamHandler(sys.stdout)
-    sh.setFormatter(fmt)
     logger.addHandler(fh)
-    logger.addHandler(sh)
+    # Sub systemd stdout ajunge în journal; liniile sunt deja în robot.log, deci nu le dublăm pe cardul SD
+    if sys.stdout.isatty():
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(fmt)
+        logger.addHandler(sh)
 
 # 2. Activare faulthandler pentru capturarea crash-urilor C / PortAudio / X11
 _fault_fp = None
@@ -132,6 +134,7 @@ class MonitorSanatatePi:
         self.interval_sec = interval_sec
         self._stop_evt = threading.Event()
         self.ultima_stare = citeste_stare_hardware()
+        self._avertismente_active = set()
         self._thread = threading.Thread(target=self._loop, name="HealthMonitor", daemon=True)
 
     def start(self):
@@ -148,13 +151,23 @@ class MonitorSanatatePi:
                 logger.debug(f"[FAULTHANDLER CLOSE]: {e}")
             _fault_fp = None
 
+    def _jurnalizeaza_schimbari(self, avertismente):
+        """Scrie în log doar când un avertisment apare sau dispare, ca să nu uzeze cardul SD."""
+        # Cheia e textul dinainte de ":", ca o valoare nouă (°C, MB) să nu pară alt avertisment
+        curente = {av.split(":")[0]: av for av in avertismente}
+        for cheie, av in curente.items():
+            if cheie not in self._avertismente_active:
+                logger.warning(f"[HEALTH MONITOR]: {av}")
+        for cheie in self._avertismente_active - set(curente):
+            logger.info(f"[HEALTH MONITOR]: A dispărut: {cheie}")
+        self._avertismente_active = set(curente)
+
     def _loop(self):
         while not self._stop_evt.is_set():
             try:
                 stare = citeste_stare_hardware()
                 self.ultima_stare = stare
-                for av in stare["avertismente"]:
-                    logger.warning(f"[HEALTH MONITOR]: {av}")
+                self._jurnalizeaza_schimbari(stare["avertismente"])
             except Exception as e:
                 logger.error(f"Eroare în HealthMonitor: {e}")
             self._stop_evt.wait(self.interval_sec)

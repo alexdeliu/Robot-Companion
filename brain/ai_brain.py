@@ -116,6 +116,12 @@ CUVINTE_OPRIRE_MEDIA = re.compile(
 COMENZI_OPRIRE_SCURTE = ("opreste video", "opreste videoclipul", "opreste muzica", "opreste")
 COMENZI_OPRIRE_EXACTE = ("stop", "gata")
 PRAG_OPRIRE_APROXIMATIVA = 0.8
+# Forme comparate aproximativ doar în fereastra de selecție („a noua”, „adoua” = „a doua”)
+FORME_SELECTIE_APROXIMATIVE = {
+    "primul": 1, "prima": 1, "al doilea": 2, "a doua": 2, "al treilea": 3, "a treia": 3,
+    "al patrulea": 4, "a patra": 4, "al cincilea": 5, "a cincea": 5
+}
+PRAG_SELECTIE_APROXIMATIVA = 0.75
 _FARA_DIACRITICE = str.maketrans("ăâîșşțţ", "aaisstt")
 
 # Cereri de redare sau căutare în care un cuvânt ca „soare” sau „rain” e titlu, nu întrebare despre vreme
@@ -161,6 +167,24 @@ def _este_oprire_media(text_mic):
         difflib.SequenceMatcher(None, text_simplu, comanda).ratio() >= PRAG_OPRIRE_APROXIMATIVA
         for comanda in COMENZI_OPRIRE_SCURTE
     )
+
+
+def _gaseste_selectie_yt(text_mic):
+    """Returnează numărul ales din listă sau None; potrivirea exactă are prioritate."""
+    if len(text_mic.split()) > 5:
+        return None
+    for expresie, nr in CUVINTE_SELECTIE_YT.items():
+        if re.search(rf"\b{re.escape(expresie)}\b", text_mic):
+            return nr
+    text_simplu = text_mic.translate(_FARA_DIACRITICE).strip(" .,!?")
+    if len(text_simplu.split()) > 3:
+        return None
+    scor_maxim, nr_ales = 0.0, None
+    for forma, nr in FORME_SELECTIE_APROXIMATIVE.items():
+        scor = difflib.SequenceMatcher(None, text_simplu, forma).ratio()
+        if scor > scor_maxim:
+            scor_maxim, nr_ales = scor, nr
+    return nr_ales if scor_maxim >= PRAG_SELECTIE_APROXIMATIVA else None
 
 
 def _selectie_yt_activa():
@@ -423,15 +447,14 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
         return {"actiune": "opreste_media", "parametru": "", "mesaj": msg}
 
     if _selectie_yt_activa():
-        for expresie, nr in CUVINTE_SELECTIE_YT.items():
-            if re.search(rf"\b{re.escape(expresie)}\b", text_mic) and len(text_mic.split()) <= 5:
-                ales = selecteaza_meta_dupa_numar(nr)
-                if ales:
-                    _TS_LISTA_YT = None
-                    msg = f"Redau acum opțiunea {nr}."
-                    if on_text_chunk:
-                        on_text_chunk(msg)
-                    return {"actiune": "selecteaza_youtube", "parametru": str(nr), "mesaj": msg, "date_ui": ales}
+        nr = _gaseste_selectie_yt(text_mic)
+        ales = selecteaza_meta_dupa_numar(nr) if nr else None
+        if ales:
+            _TS_LISTA_YT = None
+            msg = f"Redau acum opțiunea {nr}."
+            if on_text_chunk:
+                on_text_chunk(msg)
+            return {"actiune": "selecteaza_youtube", "parametru": str(nr), "mesaj": msg, "date_ui": ales}
 
     if any(k in text_mic for k in ("următoarea melodie", "urmatoarea melodie", "piesa următoare", "next song")):
         ales = piesa_urmatoare()

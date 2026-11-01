@@ -187,11 +187,15 @@ def _extrage_stream_direct_ytdlp(video_id, doar_audio=True):
 
     url_yt = f"https://www.youtube.com/watch?v={video_id}"
     h_max = int(CFG["youtube"].get("max_video_height", 360))
-    # Pentru video cerem progresiv mp4 <=360p (itag 18 are 30fps!), cu fallback pe bestvideo+bestaudio separat
+    # H.264 primul: AV1 e decodat prea greu de Pi 3, iar yt-dlp îl preferă dacă nu cerem explicit avc1.
+    # Urmează variantele vechi, ca redarea să meargă și când YouTube nu oferă H.264.
     fmt = (
         "bestaudio[ext=m4a]/bestaudio/best"
         if doar_audio
-        else f"best[height<={h_max}][ext=mp4]/bestvideo[height<={h_max}][ext=mp4]+bestaudio[ext=m4a]/best[height<={h_max}]/best"
+        else (
+            f"best[height<={h_max}][ext=mp4][vcodec^=avc1]/bestvideo[height<={h_max}][vcodec^=avc1]+bestaudio[ext=m4a]/"
+            f"best[height<={h_max}][ext=mp4]/bestvideo[height<={h_max}][ext=mp4]+bestaudio[ext=m4a]/best[height<={h_max}]/best"
+        )
     )
     timeout_s = str(int(CFG["youtube"].get("ytdlp_timeout_sec", 14)))
     log_err = bool(CFG["youtube"].get("log_errors", True))
@@ -379,6 +383,20 @@ def cauta_youtube_oficial(interogare, doar_muzica=False, max_rezultate=5):
         return []
 
 
+def _raporteaza_oprire_audio():
+    """Loghează de ce s-a oprit mpv cât timp imaginea încă merge."""
+    proces = _PROCES_PLAYER_YT
+    cod = proces.returncode if proces else None
+    detalii = ""
+    try:
+        if os.path.exists(_MPV_LOG_PATH):
+            with open(_MPV_LOG_PATH, "r", encoding="utf-8", errors="ignore") as f:
+                detalii = f.read()[-400:].strip()
+    except OSError as e:
+        logger.debug(f"[MPV LOG]: {e}")
+    logger.warning(f"[MEDIA]: mpv s-a oprit în timpul video-ului (cod {cod}): {detalii}")
+
+
 def _ruleaza_decodare_video_in_canvas(video_url, sesiune_id, on_frame_rgb, latime=320, inaltime=180):
     """
     Decodare video ultra-ușoară cu ffmpeg direct în Canvas-ul Tkinter de pe ecranul SPI!
@@ -414,7 +432,11 @@ def _ruleaza_decodare_video_in_canvas(video_url, sesiune_id, on_frame_rgb, latim
             start_new_session=True
         )
         _PROCES_FFMPEG_VIDEO = proc
+        audio_raportat = False
         while proc.poll() is None and sesiune_id == _SESIUNE_MEDIA_ID:
+            if not audio_raportat and not este_media_activa() and sesiune_id == _SESIUNE_MEDIA_ID:
+                audio_raportat = True
+                _raporteaza_oprire_audio()
             if _ESTE_IN_PAUZA:
                 time.sleep(0.1)
                 continue
@@ -427,6 +449,11 @@ def _ruleaza_decodare_video_in_canvas(video_url, sesiune_id, on_frame_rgb, latim
     finally:
         proc_f = _PROCES_FFMPEG_VIDEO
         if proc_f:
+            if proc_f.poll() not in (None, 0) and sesiune_id == _SESIUNE_MEDIA_ID and proc_f.stderr:
+                try:
+                    logger.warning(f"[FFMPEG SPI CANVAS]: {proc_f.stderr.read()[-300:].decode('utf-8', 'ignore').strip()}")
+                except (OSError, ValueError) as e_err:
+                    logger.debug(f"[FFMPEG STDERR]: {e_err}")
             for flux in (proc_f.stdout, proc_f.stderr):
                 if flux:
                     try:

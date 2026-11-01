@@ -49,6 +49,7 @@
     "enabled_by_default": true,
     "preferred_strategy": "auto",
     "strict_triggers": false,
+    "isolated_soft_triggers": false,
     "strategies_order": [
       "vosk_phonetic",
       "openwakeword",
@@ -97,9 +98,9 @@
       "wlshm",
       "sdl"
     ],
-    "max_video_height": 360,
+    "max_video_height": 240,
     "max_video_fps": 30,
-    "spi_canvas_fps": 12,
+    "spi_canvas_fps": 10,
     "keep_video_after_voice": false,
     "search_timeout_sec": 6,
     "ytdlp_timeout_sec": 14,
@@ -113,6 +114,7 @@
     "health_refresh_ms": 15000,
     "min_button_height_px": 36,
     "dnd_enabled": false,
+    "hide_cursor": true,
     "adaptive_idle_polling": false
   }
 }

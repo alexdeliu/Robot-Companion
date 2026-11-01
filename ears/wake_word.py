@@ -48,6 +48,8 @@ GRAMATICA_FONETICA_EXTINSA = json.dumps([
 
 # Cu wake_word.strict_triggers activ, doar aceste cuvinte trezesc robotul
 DECLANSATORI_STRICTI = {"robot", "robots", "robotul", "robotule", "robote"}
+# Cu wake_word.isolated_soft_triggers activ, „Robot” auzit greșit contează doar ca rezultat final, singur în frază
+DECLANSATORI_IZOLATI = {"about", "robert", "robbie", "rob", "robin"}
 
 
 def seteaza_callback_debug_wake(cb):
@@ -107,6 +109,18 @@ def potrivire_fuzzy_robot(text_auzit):
                 if difflib.SequenceMatcher(None, cuv, tinta).ratio() >= prag_fuzzy:
                     return True
     return False
+
+
+def decide_declansare_vosk(text_auzit, rezultat_final):
+    cfg_wake = CFG.get("wake_word", {})
+    if cfg_wake.get("strict_triggers", False):
+        return rezultat_final and potrivire_fuzzy_robot(text_auzit)
+    if cfg_wake.get("isolated_soft_triggers", False):
+        cuvinte = [c.strip(".,!?-") for c in text_auzit.lower().split()]
+        if any(c in DECLANSATORI_STRICTI for c in cuvinte):
+            return True
+        return rezultat_final and len(cuvinte) == 1 and cuvinte[0] in DECLANSATORI_IZOLATI
+    return potrivire_fuzzy_robot(text_auzit)
 
 
 class _StreamDSP16k:
@@ -285,7 +299,6 @@ def asteapta_wake_word(oprire_event, on_detectat=None):
                             nr_cadre = 0
                             rms_list = []
                             ultimul_text = ""
-                            mod_strict = bool(CFG.get("wake_word", {}).get("strict_triggers", False))
 
                             while not oprire_event.is_set():
                                 if _este_robotul_in_vorbire():
@@ -311,7 +324,7 @@ def asteapta_wake_word(oprire_event, on_detectat=None):
                                     if DEBUG:
                                         logger.debug(f"[WAKE VOSK]: auzit='{rez}' (RMS={int(rms)})")
                                     _notifica_ui_wake(f"Mic RMS:{int(rms)} | Auzit: '{rez}'")
-                                    if (rezultat_final or not mod_strict) and potrivire_fuzzy_robot(rez):
+                                    if decide_declansare_vosk(rez, rezultat_final):
                                         logger.info(f"[WAKE WORD]: Declanșat prin Vosk ('{rez}', RMS={int(rms)})!")
                                         break
 

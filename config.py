@@ -104,10 +104,12 @@ def incarca_config():
     cfg["youtube"].setdefault("log_errors", True)
     cfg["youtube"].setdefault("keep_video_after_voice", False)
     cfg["wake_word"].setdefault("strict_triggers", False)
+    cfg["wake_word"].setdefault("isolated_soft_triggers", False)
     cfg["wake_word"].setdefault("telemetry_interval_sec", 5.0)
     cfg["wake_word"].setdefault("debug_wake_in_ui", True)
     cfg["ui"].setdefault("min_button_height_px", 36)
     cfg["ui"].setdefault("dnd_enabled", False)
+    cfg["ui"].setdefault("hide_cursor", True)
     cfg["ui"].setdefault("adaptive_idle_polling", False)
     for cale in (CONFIG_JSON_PATH, CONFIG_LOCAL_PATH):
         if os.path.exists(cale):

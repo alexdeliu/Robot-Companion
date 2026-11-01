@@ -53,6 +53,14 @@ class RobotCompanionUI:
         self.root = root
         self.root.title("Robot Companion")
 
+        # Cursorul e ascuns pe ecranul tactil; apare scurt doar la atingere
+        self._cursor_ascuns_activ = bool(CFG["ui"].get("hide_cursor", True))
+        self._id_ascundere_cursor = None
+        if self._cursor_ascuns_activ:
+            self.root.option_add("*cursor", "none")
+            self.root.configure(cursor="none")
+            self.root.bind_all("<ButtonPress>", self._la_atingere_ecran, add="+")
+
         self._state_lock = threading.RLock()
         self.stare = RobotState.IDLE
         self._task_id = 0
@@ -65,6 +73,7 @@ class RobotCompanionUI:
         self.inchidere_aplicatie = False
         self._img_referinta_ui = None
         self._img_video_frame = None
+        self._frame_video_in_asteptare = False
         self._ultimul_cautare_yt = ""
         self._ultimele_rezultate_yt = []
         self._idx_fata = 0
@@ -224,6 +233,26 @@ class RobotCompanionUI:
         self.entry_input.focus_force()
         self.root.after(150, self.porneste_salut_initial)
 
+    # --- CURSOR ASCUNS PE ECRANUL TACTIL ---
+    def _seteaza_cursor(self, nume, widget=None):
+        tinta = widget or self.root
+        try:
+            tinta.configure(cursor=nume)
+        except tk.TclError as e:
+            logger.debug(f"[UI CURSOR]: {e}")
+        for copil in tinta.winfo_children():
+            self._seteaza_cursor(nume, copil)
+
+    def _ascunde_cursor(self):
+        self._id_ascundere_cursor = None
+        self._seteaza_cursor("none")
+
+    def _la_atingere_ecran(self, event=None):
+        self._seteaza_cursor("arrow")
+        if self._id_ascundere_cursor:
+            self.root.after_cancel(self._id_ascundere_cursor)
+        self._id_ascundere_cursor = self.root.after(2500, self._ascunde_cursor)
+
     # --- AUTO-FIT FONT PENTRU BUTOANE (P2: Măsoară cu tkfont.Font.measure) ---
     def adapteaza_buton_la_spatiu(self, btn):
         try:
@@ -380,6 +409,11 @@ class RobotCompanionUI:
 
     # --- OVERLAY 0: PAGINĂ STATUS SISTEM (P2: Butonul ÎNCHIDE împachetat PRIMUL) ---
     def afiseaza_overlay_status(self, st_preluat=None):
+        # Overlay-ul înlocuiește suprafața video, deci un video rămas ar merge orbește în fundal
+        if hasattr(self, "video_surface") and self.video_surface.winfo_exists() and este_media_activa():
+            inchide_overlay_youtube()
+            if self.stare in (RobotState.MUSIC, RobotState.VIDEO):
+                self._seteaza_stare_ui(RobotState.IDLE)
         self.ascunde_overlay()
         for w in self.frame_overlay.winfo_children():
             w.destroy()
@@ -598,22 +632,28 @@ class RobotCompanionUI:
         w_surf = max(240, self.video_surface.winfo_width())
         h_surf = max(135, self.video_surface.winfo_height())
         pastreaza_video = bool(CFG["youtube"].get("keep_video_after_voice", False))
+        self._frame_video_in_asteptare = False
 
         def _primeste_frame_rgb(raw_rgb, w, h):
             if self.inchidere_aplicatie or (self.stare != RobotState.VIDEO and not pastreaza_video):
                 return
-            try:
-                from PIL import Image, ImageTk
-                img_pil = Image.frombytes("RGB", (w, h), raw_rgb)
-                img_tk = ImageTk.PhotoImage(img_pil)
+            # Dacă ecranul n-a terminat cadrul anterior, îl sărim pe acesta ca să nu se adune întârziere
+            if self._frame_video_in_asteptare:
+                return
+            self._frame_video_in_asteptare = True
 
-                def _draw():
+            def _draw():
+                try:
                     if hasattr(self, "video_surface") and self.video_surface.winfo_exists():
+                        from PIL import Image, ImageTk
+                        img_tk = ImageTk.PhotoImage(Image.frombytes("RGB", (w, h), raw_rgb))
                         self._img_video_frame = img_tk
                         self.video_surface.config(image=img_tk, text="")
-                self.root.after(0, _draw)
-            except Exception as e:
-                logger.debug(f"[DRAW SPI FRAME]: {e}")
+                except Exception as e:
+                    logger.debug(f"[DRAW SPI FRAME]: {e}")
+                finally:
+                    self._frame_video_in_asteptare = False
+            self.root.after(0, _draw)
 
         def _set_status(msg_st):
             if not self.inchidere_aplicatie:
@@ -1054,6 +1094,9 @@ class RobotCompanionUI:
             if actiune == "arata_status" and isinstance(date_ui, dict):
                 self.root.after(0, self.afiseaza_overlay_status, date_ui)
             elif actiune == "cauta_wikipedia" and isinstance(date_ui, dict):
+                # Cardul acoperă playerul, deci oprim media în loc s-o lăsăm în fundal
+                if este_media_activa():
+                    inchide_overlay_youtube()
                 self.root.after(0, self.afiseaza_overlay_wikipedia, date_ui)
             elif actiune == "reda_youtube" and isinstance(date_ui, list):
                 self.root.after(0, self.afiseaza_overlay_youtube_lista, parametru, date_ui)

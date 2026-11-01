@@ -19,6 +19,7 @@
     "tts_rate": "+8%",
     "volum_normal": 95,
     "volum_ducking": 30,
+    "duck_during_tts": false,
     "alsa_card": null
   },
   "microphone": {
@@ -47,6 +48,7 @@
   "wake_word": {
     "enabled_by_default": true,
     "preferred_strategy": "auto",
+    "strict_triggers": false,
     "strategies_order": [
       "vosk_phonetic",
       "openwakeword",
@@ -79,7 +81,6 @@
       "rabat",
       "rub out",
       "oh bought",
-      "about",
       "hey robot",
       "ok robot",
       "okay robot",
@@ -99,6 +100,7 @@
     "max_video_height": 360,
     "max_video_fps": 30,
     "spi_canvas_fps": 12,
+    "keep_video_after_voice": false,
     "search_timeout_sec": 6,
     "ytdlp_timeout_sec": 14,
     "cache_ttl_sec": 1800,

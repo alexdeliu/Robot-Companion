@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 import json
 import time
 import socket
@@ -40,9 +41,17 @@ HEADERS_WEB = {
 }
 
 
+def obtine_cale_ytdlp():
+    """Preferă yt-dlp din venv: cel instalat din apt e prea vechi pentru YouTube, chiar dacă e în PATH."""
+    cale_venv = os.path.join(os.path.dirname(sys.executable), "yt-dlp")
+    if os.path.isfile(cale_venv) and os.access(cale_venv, os.X_OK):
+        return cale_venv
+    return shutil.which("yt-dlp")
+
+
 def verifica_versiune_ytdlp():
     """Verifică la pornire versiunea yt-dlp și runtime-ul JS fără a bloca aplicația."""
-    cmd_bin = shutil.which("yt-dlp")
+    cmd_bin = obtine_cale_ytdlp()
     if not cmd_bin:
         logger.warning("[YOUTUBE CHECK]: Utilitarul 'yt-dlp' nu a fost găsit în PATH! Rulează: pip install -U yt-dlp")
         return "lipsă"
@@ -138,6 +147,17 @@ def restabileste_volum_normal():
     return _aplica_volum_alsa(_VOLUM_NORMAL)
 
 
+def atenueaza_media_pentru_voce():
+    """Scade doar volumul din mpv, ca vocea robotului să rămână la volumul normal."""
+    if CFG["audio_out"].get("duck_during_tts", False) and este_media_activa():
+        _trimite_comanda_mpv_ipc(["set_property", "volume", _VOLUM_DUCKING])
+
+
+def restabileste_media_dupa_voce():
+    if CFG["audio_out"].get("duck_during_tts", False) and este_media_activa():
+        _trimite_comanda_mpv_ipc(["set_property", "volume", _VOLUM_NORMAL])
+
+
 def schimba_volum_relativ(delta):
     global _VOLUM_NORMAL
     _VOLUM_NORMAL = max(20, min(100, _VOLUM_NORMAL + int(delta)))
@@ -176,7 +196,7 @@ def _extrage_stream_direct_ytdlp(video_id, doar_audio=True):
     timeout_s = str(int(CFG["youtube"].get("ytdlp_timeout_sec", 14)))
     log_err = bool(CFG["youtube"].get("log_errors", True))
 
-    cmd_bin = shutil.which("yt-dlp")
+    cmd_bin = obtine_cale_ytdlp()
     if cmd_bin:
         for incercare in range(2):
             try:

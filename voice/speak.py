@@ -182,8 +182,9 @@ def vorbeste(text, limba="ro"):
         voce = VOCE_RO if limba == "ro" else VOCE_EN
 
         try:
-            from brain.abilities.youtube_player import restabileste_volum_normal
+            from brain.abilities.youtube_player import restabileste_volum_normal, atenueaza_media_pentru_voce
             restabileste_volum_normal()
+            atenueaza_media_pentru_voce()
         except Exception as e:
             logger.debug(f"[RESTABILESTE VOLUM TTS]: {e}")
 
@@ -199,6 +200,11 @@ def vorbeste(text, limba="ro"):
         finally:
             _ESTE_VORBIRE_ACTIVA = False
             _ULTIMA_VORBIRE_FINAL = time.monotonic()
+            try:
+                from brain.abilities.youtube_player import restabileste_media_dupa_voce
+                restabileste_media_dupa_voce()
+            except Exception as e:
+                logger.debug(f"[RESTABILESTE MEDIA TTS]: {e}")
             try:
                 if os.path.exists(cale_temp):
                     os.remove(cale_temp)

@@ -10,7 +10,7 @@ if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
 from config import CFG
-from brain.abilities.youtube_player import cauta_youtube_oficial, _extrage_stream_direct_ytdlp
+from brain.abilities.youtube_player import cauta_youtube_oficial, _extrage_stream_direct_ytdlp, obtine_cale_ytdlp
 
 
 def _cmd_out(cmd, timeout=10):
@@ -31,7 +31,8 @@ def ruleaza_diag_youtube():
     sesiune = os.environ.get("XDG_SESSION_TYPE", "necunoscut")
     disp = os.environ.get("DISPLAY", "nesetat")
     wayland = os.environ.get("WAYLAND_DISPLAY", "nesetat")
-    _, ytdlp_v, _ = _cmd_out(["yt-dlp", "--version"])
+    cale_ytdlp = obtine_cale_ytdlp() or "yt-dlp"
+    _, ytdlp_v, _ = _cmd_out([cale_ytdlp, "--version"])
     _, mpv_v, _ = _cmd_out(["mpv", "--version"])
     _, ff_v, _ = _cmd_out(["ffmpeg", "-version"])
     fb_devs = [f for f in os.listdir("/dev") if f.startswith("fb") or f.startswith("spidev")] if os.path.isdir("/dev") else []
@@ -58,7 +59,7 @@ def ruleaza_diag_youtube():
 
     # 3. Listare formate disponibile cu stderr vizibil
     print(f"\n[3] Extracție URL-uri pentru {url_test}:")
-    rc_f, out_f, err_f = _cmd_out(["yt-dlp", "--no-warnings", "--no-playlist", "-F", url_test], timeout=18)
+    rc_f, out_f, err_f = _cmd_out([cale_ytdlp, "--no-warnings", "--no-playlist", "-F", url_test], timeout=18)
     if rc_f == 0:
         linii_mp4 = [l for l in out_f.splitlines() if "mp4" in l or "m4a" in l][-6:]
         print("    [OK] Formate MP4/M4A disponibile (ultimele 6):")

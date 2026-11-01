@@ -2,6 +2,7 @@ import os
 import re
 import time
 import random
+import difflib
 import threading
 from datetime import datetime
 from google import genai
@@ -17,6 +18,7 @@ from brain.abilities.youtube_player import (
     selecteaza_meta_dupa_numar,
     reda_rezultat_dupa_numar,
     inchide_overlay_youtube,
+    este_media_activa,
     piesa_urmatoare,
     piesa_anterioara,
     seteaza_volum_sistem,
@@ -98,6 +100,7 @@ CUVINTE_SELECTIE_YT = {
     "al treilea": 3, "a treia": 3, "trei": 3, "numărul 3": 3, "numarul 3": 3, "varianta 3": 3,
     "al patrulea": 4, "a patra": 4, "patru": 4, "numărul 4": 4, "numarul 4": 4, "varianta 4": 4,
     "al cincilea": 5, "a cincea": 5, "cinci": 5, "numărul 5": 5, "numarul 5": 5, "varianta 5": 5,
+    "două": 2, "doua": 2, "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
 }
 
 # Selecția vocală e permisă doar scurt timp după afișarea listei, ca frazele normale să nu pornească un video
@@ -105,9 +108,15 @@ SECUNDE_SELECTIE_YT = 180
 _TS_LISTA_YT = None
 
 CUVINTE_OPRIRE_MEDIA = re.compile(
-    r"\b(oprește muzica|opreste muzica|oprește videoclipul|opreste video|închide youtube|inchide youtube|stop youtube|oprește youtube|oprește-te|taci)\b",
+    r"\b(oprește muzica|opreste muzica|oprește video|oprește videoclipul|opreste video|închide youtube|inchide youtube|stop youtube|oprește youtube|oprește-te|taci)\b",
     re.IGNORECASE
 )
+
+# Comenzi scurte de oprire, comparate aproximativ doar cât rulează media („presă video” = „(o)prește video”)
+COMENZI_OPRIRE_SCURTE = ("opreste video", "opreste videoclipul", "opreste muzica", "opreste")
+COMENZI_OPRIRE_EXACTE = ("stop", "gata")
+PRAG_OPRIRE_APROXIMATIVA = 0.8
+_FARA_DIACRITICE = str.maketrans("ăâîșşțţ", "aaisstt")
 
 # Cereri de redare sau căutare în care un cuvânt ca „soare” sau „rain” e titlu, nu întrebare despre vreme
 CUVINTE_CERERE_MEDIA = re.compile(
@@ -136,6 +145,22 @@ def reseteaza_memorie_ai():
     global istoric_conversatie
     with _istoric_lock:
         istoric_conversatie.clear()
+
+
+def _este_oprire_media(text_mic):
+    if CUVINTE_OPRIRE_MEDIA.search(text_mic):
+        return True
+    if not este_media_activa():
+        return False
+    text_simplu = text_mic.translate(_FARA_DIACRITICE).strip(" .,!?")
+    if text_simplu in COMENZI_OPRIRE_EXACTE:
+        return True
+    if len(text_simplu.split()) > 3:
+        return False
+    return any(
+        difflib.SequenceMatcher(None, text_simplu, comanda).ratio() >= PRAG_OPRIRE_APROXIMATIVA
+        for comanda in COMENZI_OPRIRE_SCURTE
+    )
 
 
 def _selectie_yt_activa():
@@ -390,7 +415,7 @@ def proceseaza_comanda_ai(text, limba="ro", on_text_chunk=None, on_propozitie=No
         return {"actiune": "vorbeste_normal", "parametru": "", "mesaj": msg}
 
     # 5. Control Media Rapid
-    if CUVINTE_OPRIRE_MEDIA.search(text_mic):
+    if _este_oprire_media(text_mic):
         inchide_overlay_youtube()
         msg = "Am oprit redarea."
         if on_text_chunk:

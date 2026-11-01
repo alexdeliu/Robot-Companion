@@ -597,9 +597,10 @@ class RobotCompanionUI:
         wid = self.video_surface.winfo_id()
         w_surf = max(240, self.video_surface.winfo_width())
         h_surf = max(135, self.video_surface.winfo_height())
+        pastreaza_video = bool(CFG["youtube"].get("keep_video_after_voice", False))
 
         def _primeste_frame_rgb(raw_rgb, w, h):
-            if self.inchidere_aplicatie or self.stare != RobotState.VIDEO:
+            if self.inchidere_aplicatie or (self.stare != RobotState.VIDEO and not pastreaza_video):
                 return
             try:
                 from PIL import Image, ImageTk
@@ -917,7 +918,8 @@ class RobotCompanionUI:
             self.toggle_tastatura()
 
         self._seteaza_stare_ui(RobotState.LISTENING)
-        self.actualizeaza_stare_mic("pregatire")
+        # Prin after(0), ca să rămână după actualizarea LISTENING: „VORBEȘTE ACUM!” apare doar cu microfonul deschis
+        self.root.after(0, self.actualizeaza_stare_mic, "pregatire")
         threading.Thread(target=self.fir_executie_ascultare, args=(tid,), name="ListenThread", daemon=True).start()
 
     def fir_executie_ascultare(self, tid):

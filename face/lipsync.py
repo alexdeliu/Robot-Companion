@@ -70,6 +70,40 @@ def nivel_simulat(t):
     return max(0.0, silaba * fraza * pauza)
 
 
+def estimeaza_decalaj(referinta, masurat, pas_s=0.01, max_s=1.2):
+    """Cu cat e intarziat sirul masurat fata de referinta (doua anvelope esantionate la pas_s).
+
+    Intoarce (decalaj in secunde, scor 0..1); scorul e corelatia la decalajul gasit.
+    Folosit la calibrare: referinta = anvelopa fisierului audio, masurat = ce a auzit microfonul.
+    """
+    def normalizeaza(v):
+        if not v:
+            return []
+        medie = sum(v) / len(v)
+        abatere = math.sqrt(sum((x - medie) ** 2 for x in v) / len(v)) or 1.0
+        return [(x - medie) / abatere for x in v]
+
+    ref, mas = normalizeaza(list(referinta)), normalizeaza(list(masurat))
+    if len(ref) < 10 or len(mas) < 10:
+        return 0.0, 0.0
+    scoruri = []
+    for k in range(int(max_s / pas_s) + 1):
+        n = min(len(ref), len(mas) - k)
+        if n < 10:
+            break
+        scoruri.append(sum(ref[j] * mas[j + k] for j in range(n)) / n)
+    if not scoruri:
+        return 0.0, 0.0
+    k = max(range(len(scoruri)), key=scoruri.__getitem__)
+    fin = float(k)
+    if 0 < k < len(scoruri) - 1:
+        a, b, c = scoruri[k - 1], scoruri[k], scoruri[k + 1]
+        numitor = a - 2 * b + c
+        if numitor < 0:
+            fin = k + 0.5 * (a - c) / numitor
+    return fin * pas_s, max(0.0, min(1.0, scoruri[k]))
+
+
 def _la_mono_16k(raw, frecventa, canale):
     """Aduce PCM 16 biti la mono 16 kHz (pentru decodarea prin pygame, pe PC)."""
     if audioop is not None:

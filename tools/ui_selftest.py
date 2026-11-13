@@ -216,6 +216,16 @@ def ruleaza_test_fata():
         ui.afiseaza_mesaj("Tu", "salut robot")
         verifica("ce spui apare ca subtitrare", "salut robot" in fata.canvas.itemcget(fata._txt_sub, "text"))
 
+        ui._seteaza_stare_ui("LISTENING")
+        ui.actualizeaza_stare_mic("asculta")
+        _pompeaza(root, 0.15)
+        verifica("cât ascultă, fața stă nemișcată (procesorul rămâne pentru microfon)", fata._inghetat)
+        ui.actualizeaza_stare_mic("procesare")
+        _pompeaza(root, 0.1)
+        verifica("după ascultare fața se mișcă din nou", not fata._inghetat)
+        ui._seteaza_stare_ui("IDLE")
+        _pompeaza(root, 0.1)
+
         # Gura după voce: un ton de 0,6 s încărcat direct, apoi notificările pe care le trimite voice.speak
         from array import array
         import math

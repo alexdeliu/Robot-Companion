@@ -24,6 +24,9 @@ class AfisajFataTk:
         self._afisat = {}
         self._chei = {}
         self._randuri = {}
+        self._rotatie = 0
+        self.max_grele = 1          # cate imagini desenate de la zero accepta pe cadru
+        self.in_asteptare = False   # True daca a ramas ceva de desenat pentru cadrul urmator
         self._elemente = {}
         self.randari = 0
         for nume, cutie in self.geo.cutii().items():
@@ -55,9 +58,20 @@ class AfisajFataTk:
     def aplica(self, st):
         """Deseneaza starea. Intoarce intervalele de randuri modificate, pentru statistici."""
         modificate = []
-        for nume, cheie, fn in componente(self.geo, st):
+        self.in_asteptare = False
+        grele = 0
+        lista = componente(self.geo, st)
+        # Ordinea se roteste, ca o componenta amanata sa fie prima la cadrul urmator
+        k = self._rotatie % len(lista)
+        self._rotatie += 1
+        for nume, cheie, fn, greu in lista[k:] + lista[:k]:
             if self._chei.get(nume) == cheie:
                 continue
+            if fn is not None and cheie not in self._cache and greu():
+                if grele >= self.max_grele:
+                    self.in_asteptare = True
+                    continue
+                grele += 1
             item, cutie = self._elemente[nume]
             foto, dx, dy, inalt = self._foto(cheie, fn) if fn is not None else ("", 0, 0, 0)
             self.canvas.coords(item, (cutie[0] + dx) * self.zoom, (cutie[1] + dy) * self.zoom)

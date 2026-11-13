@@ -10,7 +10,7 @@ import subprocess
 import unicodedata
 import edge_tts
 
-from config import VOCE_RO, VOCE_EN, VITEZA_VOCE, DEBUG
+from config import VOCE_RO, VOCE_EN, VITEZA_VOCE, TON_VOCE, DEBUG
 from system_health import logger
 
 _MIXER_INITIALIZAT = False
@@ -93,6 +93,20 @@ _ABREVIERI_RO = [
 ]
 
 
+# Nume cu simboluri pe care curățarea de markdown le-ar strica („C#” ar rămâne „C”); (tipar, română, engleză)
+_SIMBOLURI_VORBITE = [
+    (re.compile(r"(?<![\w#])C\s?#(?!\w)", re.IGNORECASE), "si șarp", "C sharp"),
+    (re.compile(r"(?<![\w#])F\s?#(?!\w)", re.IGNORECASE), "ef șarp", "F sharp"),
+    (re.compile(r"(?<![\w+])C\+\+(?!\w)", re.IGNORECASE), "si plas plas", "C plus plus"),
+    (re.compile(r"(?<!\w)\.NET\b", re.IGNORECASE), "dot net", "dot net"),
+]
+
+
+def _voce_multilingva(limba="ro"):
+    """Vocile multilingve pronunță singure cuvintele străine, deci nu le mai rescriem fonetic."""
+    return "Multilingual" in (VOCE_RO if limba == "ro" else VOCE_EN)
+
+
 def _obtine_cale_audio_temp():
     pid_tid = f"{os.getpid()}_{threading.get_ident()}"
     if os.path.isdir("/dev/shm"):
@@ -112,6 +126,9 @@ def _curata_si_adapteaza_text(text, limba="ro"):
     text_curat = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2212]", "-", text_curat)
     text_curat = re.sub(r"\b([a-zăâîșțA-ZĂÂÎȘȚ]{1,3})\s*-\s*([a-zăâîșțA-ZĂÂÎȘȚ]+)\b", r"\1-\2", text_curat)
     text_curat = re.sub(r"^\s*\[[^\]]+\]\s*", "", text_curat)
+    multilingva = _voce_multilingva(limba)
+    for regex_simbol, vorbit_ro, vorbit_en in _SIMBOLURI_VORBITE:
+        text_curat = regex_simbol.sub(vorbit_en if (multilingva or limba != "ro") else vorbit_ro, text_curat)
     text_curat = re.sub(r"[\*\#\_\`\~]", "", text_curat)
     text_curat = _REGEX_EMOJI.sub("", text_curat)
 
@@ -119,7 +136,7 @@ def _curata_si_adapteaza_text(text, limba="ro"):
         for regex_abrev, inlocuire in _ABREVIERI_RO:
             text_curat = regex_abrev.sub(inlocuire, text_curat)
 
-        for eng, fonetic_ro in _PERECHI_PRONUNTIE:
+        for eng, fonetic_ro in ([] if multilingva else _PERECHI_PRONUNTIE):
             pattern = re.compile(rf"(?<![\w\-]){re.escape(eng)}(?![\w\-])", re.IGNORECASE)
             text_curat = pattern.sub(fonetic_ro, text_curat)
 
@@ -127,7 +144,7 @@ def _curata_si_adapteaza_text(text, limba="ro"):
 
 
 async def _genereaza_fisier_async(text, voce, cale_fisier):
-    communicate = edge_tts.Communicate(text, voice=voce, rate=VITEZA_VOCE)
+    communicate = edge_tts.Communicate(text, voice=voce, rate=VITEZA_VOCE, pitch=TON_VOCE)
     await communicate.save(cale_fisier)
 
 

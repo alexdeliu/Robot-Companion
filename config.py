@@ -21,6 +21,7 @@ _DEFAULT_CFG = {
         "tts_voice_ro": "ro-RO-EmilNeural",
         "tts_voice_en": "en-US-ChristopherNeural",
         "tts_rate": "+8%",
+        "tts_pitch": "+0Hz",
         "volum_normal": 95,
         "volum_ducking": 30
     },
@@ -74,6 +75,7 @@ _DEFAULT_CFG = {
         "fps_idle": 1,
         "lipsync": True,
         "lipsync_offset_ms": None,
+        "ingheata_la_ascultare": True,
         "adormire_dupa_sec": 300,
         "ascunde_controale_dupa_sec": 8,
         "revenire_dupa_sec": 20,
@@ -174,6 +176,7 @@ GEMINI_TIMEOUT_MS = int(CFG["ai"]["timeout_ms"])
 VOCE_RO = os.getenv("TTS_VOICE_RO", CFG["audio_out"]["tts_voice_ro"])
 VOCE_EN = os.getenv("TTS_VOICE_EN", CFG["audio_out"]["tts_voice_en"])
 VITEZA_VOCE = os.getenv("TTS_RATE", CFG["audio_out"]["tts_rate"])
+TON_VOCE = os.getenv("TTS_PITCH", CFG["audio_out"].get("tts_pitch", "+0Hz"))
 
 SAMPLE_RATE_MIC = int(CFG["microphone"]["sample_rate"])
 PAUSE_THRESHOLD = float(CFG["microphone"]["pause_threshold"])

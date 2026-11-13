@@ -36,7 +36,7 @@ class MotorFata:
         self.fps_idle = max(0.2, float(fps_idle))
         self.adormire_dupa_sec = float(adormire_dupa_sec)
         self.respiratie = float(respiratie)
-        self.privire = ManagerPrivire(ceas)
+        self.privire = ManagerPrivire(ceas, omega=55.0)
 
         acum = ceas()
         self._baza = "neutru"
@@ -246,10 +246,12 @@ class MotorFata:
             self.privire.seteaza(0.0, 0.0, sursa="idle", timeout_s=None)
             self._urm_sacada = acum + 3.0
             return
-        if self._rng.random() < 0.5:
-            x, y = self._rng.uniform(-0.15, 0.15), self._rng.uniform(-0.1, 0.1)
+        # Tinte pe o grila mica: aceleasi pozitii revin, deci imaginile vin din cache in loc sa fie redesenate
+        if self._rng.random() < 0.45:
+            x, y = 0.0, 0.0
         else:
-            x, y = self._rng.uniform(-0.75, 0.75), self._rng.uniform(-0.5, 0.5)
+            x = self._rng.choice((-0.75, -0.5, -0.25, 0.25, 0.5, 0.75))
+            y = self._rng.choice((-0.4, 0.0, 0.0, 0.4))
         self.privire.seteaza(x, y, sursa="idle", timeout_s=None)
         self._urm_sacada = acum + self._rng.uniform(1.2, 4.0)
 

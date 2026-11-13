@@ -15,7 +15,7 @@ import math
 from array import array
 
 import face.lipsync as modul_lipsync
-from face.lipsync import LipSync, analizeaza_fereastra
+from face.lipsync import LipSync, analizeaza_fereastra, estimeaza_decalaj
 from face.motor import MotorFata, CLIPIT_INCHIDE
 from face.parametri import EXPRESII, expresie
 from face.privire import ManagerPrivire
@@ -94,7 +94,7 @@ def test_randare():
         ok, detaliu = True, ""
         for nume, expr in EXPRESII.items():
             try:
-                for element, cheie, fn in componente(geo, expr):
+                for element, cheie, fn, _greu in componente(geo, expr):
                     plata = [x for parte in cheie[1:] for x in (parte if isinstance(parte, tuple) else (parte,))]
                     if fn is None:
                         continue
@@ -299,6 +299,19 @@ def test_lipsync():
              abs(cu_audioop[0] - fara_audioop[0]) < 0.02 * cu_audioop[0] + 1
              and abs(cu_audioop[1] - fara_audioop[1]) < 0.03, f"{cu_audioop} vs {fara_audioop}")
 
+    import random as _random
+    rnd = _random.Random(3)
+    ref = []
+    while len(ref) < 400:
+        ref.extend([rnd.uniform(0.5, 1.0)] * rnd.randint(8, 25) + [0.0] * rnd.randint(5, 30))
+    ref = ref[:400]
+    auzit = [0.02 * rnd.random() for _ in range(23)] + [0.6 * v + 0.05 * rnd.random() for v in ref]
+    decalaj, scor = estimeaza_decalaj(ref, auzit)
+    verifica("calibrarea gaseste intarzierea sunetului (230 ms) cu eroare sub 15 ms",
+             abs(decalaj - 0.23) < 0.015 and scor > 0.7, f"{decalaj * 1000:.0f} ms, scor {scor:.2f}")
+    zgomot = [rnd.random() for _ in range(450)]
+    verifica("fara legatura intre semnale scorul e mic", estimeaza_decalaj(ref, zgomot)[1] < 0.3)
+
     erori = []
 
     def citeste_mereu():
@@ -330,6 +343,7 @@ def test_afisaj():
     try:
         from face.afisaj_tk import AfisajFataTk
         afisaj = AfisajFataTk(root, 480, 320, cache_max=6)
+        afisaj.max_grele = 8
         prima = afisaj.aplica(EXPRESII["neutru"])
         verifica("primul desen atinge ochii si gura", len(prima) >= 3)
         verifica("aceeasi stare nu redeseneaza nimic", afisaj.aplica(EXPRESII["neutru"]) == [])
@@ -342,6 +356,7 @@ def test_afisaj():
         root.update_idletasks()
         verifica("cache-ul respecta limita", len(afisaj._cache) <= 6)
         afisaj2 = AfisajFataTk(root, 480, 320)
+        afisaj2.max_grele = 8
         afisaj2.aplica(EXPRESII["neutru"])
         cutie_gura = afisaj2.geo.cutie_gura()
         sus, jos = afisaj2._randuri["gura"]
@@ -351,6 +366,21 @@ def test_afisaj():
         modificat = [m for m in afisaj2.aplica(deschisa)]
         verifica("schimbarea gurii atinge doar randurile gurii",
                  len(modificat) == 1 and modificat[0][0] >= cutie_gura[1] and modificat[0][1] <= cutie_gura[3])
+        afisaj3 = AfisajFataTk(root, 480, 320)
+        noua = dict(EXPRESII["surprins"], r=200.0, g=120.0, b=40.0, g_desch=0.33)
+        afisaj3.aplica(noua)
+        amanat = afisaj3.in_asteptare
+        for _ in range(4):
+            afisaj3.aplica(noua)
+        verifica("cel mult o imagine grea pe cadru, restul la cadrele urmatoare",
+                 amanat and not afisaj3.in_asteptare and len(afisaj3._chei) == 5)
+        from PIL import ImageChops, ImageOps
+        from face.randare import cheie_ochi, randeaza_ochi
+        fara_pupile = dict(EXPRESII["trist"], pm_s=0.0, pm_d=0.0)
+        stang = randeaza_ochi(afisaj3.geo, cheie_ochi(afisaj3.geo, fara_pupile, "s"), "s")
+        drept = randeaza_ochi(afisaj3.geo, cheie_ochi(afisaj3.geo, fara_pupile, "d"), "d")
+        verifica("ochiul drept e oglinda celui stang",
+                 ImageChops.difference(ImageOps.mirror(stang), drept).getbbox() is None)
         verifica("imaginile afisate raman in viata", all(f == "" or f.width() > 0 for f in afisaj._afisat.values()))
     finally:
         root.destroy()

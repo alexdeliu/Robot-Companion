@@ -82,10 +82,12 @@ CUVINTE_MAI_MULT_WIKI = re.compile(
     re.IGNORECASE
 )
 
+# Acoperă și formele pe care le întoarce recunoașterea vocală („cât este ceasul”, „cât îi ceasul”, „ce oră avem”)
 CUVINTE_ORA_DATA = re.compile(
-    r"\b(cât e ceasul|cat e ceasul|cât e ora|cat e ora|cât este ora|cat este ora|spune[- ]mi ora|ce oră e|ce ora e|ce oră este|"
-    r"în ce dată suntem|in ce data suntem|în ce zi suntem|in ce zi suntem|ce dată e azi|ce data e azi|ce dată este azi|"
-    r"ce zi e azi|ce zi este azi)\b",
+    r"\b(c[âa]t(?:\s+(?:e|este|[îi]i|o fi|s-a f[ăa]cut)|-i)\s+(?:ceasul|ceasu|ora)|"
+    r"spune[- ]mi (?:ora|c[âa]t e ceasul)|ora exact[ăa]|ce or[ăa] (?:e|este|avem|[îi]i|s-a f[ăa]cut)|"
+    r"la ce or[ăa] suntem|[îi]n ce dat[ăa] suntem|[îi]n ce zi suntem|[îi]n ce an suntem|[îi]n ce lun[ăa] suntem|"
+    r"ce dat[ăa] (?:(?:e|este) (?:azi|ast[ăa]zi)|avem)|ce zi (?:e|este) (?:azi|ast[ăa]zi)|ce zi avem)\b",
     re.IGNORECASE
 )
 
@@ -213,16 +215,27 @@ def _detecteaza_oras_rapid(text):
     return "Timișoara"
 
 
+def _instructiuni_cu_context():
+    """Instrucțiunile de sistem plus data și ora de la ceasul robotului, ca modelul să nu spună că nu le știe."""
+    acum = datetime.now()
+    return (
+        f"{instructiuni_sistem}\n\n"
+        f"CONTEXT ACTUAL (de la ceasul robotului): este {ZILE_SAPTAMANA_RO[acum.weekday()]}, {acum.day} "
+        f"{LUNI_AN_RO[acum.month]} {acum.year}, ora {acum.strftime('%H:%M')}. Dacă ești întrebat de oră, zi sau dată, "
+        f"răspunde cu aceste valori; nu spune niciodată că nu ai ceas."
+    )
+
+
 def _deschide_stream_model(model_curent, continut_apel, temperatura):
     if "lite" in model_curent:
         cfg = types.GenerateContentConfig(
-            system_instruction=instructiuni_sistem,
+            system_instruction=_instructiuni_cu_context(),
             temperature=temperatura,
             max_output_tokens=280
         )
     else:
         cfg = types.GenerateContentConfig(
-            system_instruction=instructiuni_sistem,
+            system_instruction=_instructiuni_cu_context(),
             temperature=temperatura,
             max_output_tokens=280,
             thinking_config=types.ThinkingConfig(thinking_budget=0)

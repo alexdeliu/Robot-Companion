@@ -66,6 +66,7 @@ class ControllerFata:
         self.lipsync = LipSync(self.cfg.get("lipsync_offset_ms"))
         self._voce_activa = False
         self._avertizat_lipsync = False
+        self._inghetat = False   # cat microfonul inregistreaza, fata sta nemiscata si nu foloseste procesorul
 
         self.mod = "fata"
         self._chat_fortat = False
@@ -175,20 +176,34 @@ class ControllerFata:
         try:
             self._goleste_coada()
             self._sincronizeaza_voce()
-            if self.mod == "chat" or self.motor.oprit:
-                pauza = 2.0   # fata nu se vede: nu desenam nimic, doar golim coada din cand in cand
+            if self.mod == "chat" or self.motor.oprit or self._inghetat:
+                pauza = 2.0   # fata nu se vede sau sta nemiscata: nu desenam nimic, doar golim coada
             else:
+                t0 = time.perf_counter()
                 st = self.motor.tick()
                 self._ticks += 1
                 if st is not None and self.afisaj.aplica(st):
                     self._desene += 1
                 pauza = self.motor.interval_urmator()
+                if self.afisaj.in_asteptare:
+                    pauza = min(pauza, 1.0 / self.motor.fps_activ)
+                # Dupa un cadru scump lasam procesorul liber de doua ori mai mult timp (microfon, wake word)
+                pauza = max(pauza, 2.0 * (time.perf_counter() - t0))
                 if self._txt_debug is not None:
                     self._actualizeaza_debug()
         except Exception as e:
             self._esec(e)
             return
         self._id_bucla = self.root.after(max(1, int(pauza * 1000)), self._bucla)
+
+    def _deseneaza_final(self):
+        """Deseneaza direct expresia tinta, fara tranzitie (inainte de a ingheta fata)."""
+        st = dict(EXPRESII[self.motor.expresie_curenta])
+        self.afisaj.max_grele = 8
+        try:
+            self.afisaj.aplica(st)
+        finally:
+            self.afisaj.max_grele = 1
 
     def _actualizeaza_debug(self):
         acum = time.monotonic()
@@ -440,6 +455,8 @@ class ControllerFata:
 
     def _ev_stare(self, stare):
         anterioara, self._stare = self._stare, stare
+        if stare != "LISTENING":
+            self._inghetat = False
         m = self.motor
         if stare == "VIDEO":
             m.opreste()
@@ -471,7 +488,12 @@ class ControllerFata:
             self._seteaza_subtitrare("")
         elif faza == "asculta":
             self.motor.seteaza_expresie("atent", viteza=1.4)
+            if self.cfg.get("ingheata_la_ascultare", True):
+                # Microfonul e deschis: desenam o data fata atenta, apoi o lasam nemiscata pana termini de vorbit
+                self._deseneaza_final()
+                self._inghetat = True
         elif faza == "procesare":
+            self._inghetat = False
             self.motor.seteaza_expresie("ganditor")
 
     def _ev_wake_debug(self, text=""):

@@ -6,8 +6,9 @@ Fiecare componenta are o "cheie" de numere intregi (pixeli). Doua stari cu aceea
 imagine, deci afisajul le poate tine in cache si redeseneaza doar ce s-a schimbat.
 """
 import math
+from collections import OrderedDict
 
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageOps
 
 from .parametri import FUNDAL_RGB, LATURI, hex_rgb
 
@@ -91,6 +92,20 @@ class Geometrie:
 
 # ------------------------------------------------------------------------------ ochi
 
+_FORME_OCHI = OrderedDict()   # (ecran, w, h) -> masca formei ochiului, supraesantionata
+_BAZE_OCHI = OrderedDict()    # cheia fara pupila -> (imagine, masca), in orientarea ochiului din stanga
+_LUT = {}
+randari_grele = 0             # cate imagini s-au desenat de la zero (ochi fara pupila, guri)
+
+
+def _lut(tarie):
+    """Tabel de 256 de valori pentru Image.point: mult mai rapid decat o functie apelata de 256 de ori."""
+    cheie = int(round(tarie * 1000))
+    if cheie not in _LUT:
+        _LUT[cheie] = [int(v * cheie / 1000.0) for v in range(256)]
+    return _LUT[cheie]
+
+
 def cheie_ochi(geo, st, latura):
     sufix = "_" + latura
     w = int(round(geo.ochi_w * _lim(st["lat" + sufix], 0.5, geo.max_lat)))
@@ -104,14 +119,26 @@ def cheie_ochi(geo, st, latura):
     if r < 3:
         r = px = py = 0
     else:
+        # Pupila se muta in pasi de 2 pixeli: aceleasi pozitii revin des si vin din cache
+        pas = max(1, int(round(2 * geo.s)))
         r_iris = r * RAPORT_IRIS
-        px = int(round(_lim(st["px"], -1.0, 1.0) * max(0.0, w / 2.0 - r_iris - 4 * geo.s)))
-        py = int(round(_lim(st["py"], -1.0, 1.0) * max(0.0, h / 2.0 - r_iris - 2 * geo.s)))
+        px = int(round(_lim(st["px"], -1.0, 1.0) * max(0.0, w / 2.0 - r_iris - 4 * geo.s) / pas)) * pas
+        py = int(round(_lim(st["py"], -1.0, 1.0) * max(0.0, h / 2.0 - r_iris - 2 * geo.s) / pas)) * pas
     spr = int(round(_lim(st["spr" + sufix], 0.0, 1.0) * 3))
     spr_y = int(round(_lim(st["spr_y" + sufix], -1.0, 1.0) * 4 * geo.s)) if spr else 0
     spr_i = int(round(_lim(st["spr_incl" + sufix], -1.0, 1.0) * 6 * geo.s)) if spr else 0
     glow = int(round(_lim(st["glow"], 0.0, 1.0) * 8))
     return (w, h, k_sus, k_jos, k_incl, k_as, k_aj, px, py, r, spr, spr_y, spr_i, glow, _culoare(st))
+
+
+def _cheie_baza(geo, cheie):
+    w, h, k_sus, k_jos, k_incl, k_as, k_aj, _px, _py, _r, spr, spr_y, spr_i, glow, culoare = cheie
+    return (geo.W, geo.H, w, h, k_sus, k_jos, k_incl, k_as, k_aj, spr, spr_y, spr_i, glow, culoare)
+
+
+def baza_ochi_in_cache(geo, cheie):
+    """True daca ochiul (fara pupila) e deja desenat; atunci imaginea finala costa foarte putin."""
+    return _cheie_baza(geo, cheie) in _BAZE_OCHI
 
 
 def _pupila(r, culoare):
@@ -138,17 +165,38 @@ def _pupila(r, culoare):
     return _PUPILE[cheie]
 
 
-def randeaza_ochi(geo, cheie, latura):
-    w, h, k_sus, k_jos, k_incl, k_as, k_aj, px, py, r, spr, spr_y, spr_i, glow, culoare = cheie
+def _forma_ochi(geo, w, h):
+    """Dreptunghiul rotunjit al ochiului, desenat o singura data pentru fiecare marime."""
+    cheie = (geo.W, geo.H, w, h)
+    m = _FORME_OCHI.get(cheie)
+    if m is None:
+        ss, bw, bh = SS_OCHI, geo.cutie_w, geo.cutie_h
+        cx, cy = bw / 2.0, geo.cy_local
+        m = Image.new("L", (bw * ss, bh * ss), 0)
+        ImageDraw.Draw(m).rounded_rectangle(
+            [(cx - w / 2.0) * ss, (cy - h / 2.0) * ss, (cx + w / 2.0) * ss, (cy + h / 2.0) * ss],
+            radius=min(w, h) * 0.44 * ss, fill=255)
+        _FORME_OCHI[cheie] = m
+        while len(_FORME_OCHI) > 32:
+            _FORME_OCHI.popitem(last=False)
+    return m
+
+
+def _baza_ochi(geo, cheie):
+    """Ochiul fara pupila (forma, pleoape, spranceana, glow), in orientarea ochiului din stanga."""
+    global randari_grele
+    cheie_baza = _cheie_baza(geo, cheie)
+    intrare = _BAZE_OCHI.get(cheie_baza)
+    if intrare is not None:
+        _BAZE_OCHI.move_to_end(cheie_baza)
+        return intrare
+    w, h, k_sus, k_jos, k_incl, k_as, k_aj, _px, _py, _r, spr, spr_y, spr_i, glow, culoare = cheie
     ss, bw, bh = SS_OCHI, geo.cutie_w, geo.cutie_h
     cx, cy = bw / 2.0, geo.cy_local
-    x0, y0, x1, y1 = cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0
-    semn = 1 if latura == "s" else -1   # capatul dinspre nas e la +x pentru ochiul din stanga
+    y0, y1 = cy - h / 2.0, cy + h / 2.0
 
-    m = Image.new("L", (bw * ss, bh * ss), 0)
+    m = _forma_ochi(geo, w, h).copy()
     d = ImageDraw.Draw(m)
-    d.rounded_rectangle([x0 * ss, y0 * ss, x1 * ss, y1 * ss], radius=min(w, h) * 0.44 * ss, fill=255)
-
     fanta = max(2.0, FANTA_MIN * geo.s)
     n = 14
     sus, jos = [], []
@@ -157,7 +205,7 @@ def randeaza_ochi(geo, cheie, latura):
         f = 1.0 - u * u
         x = (cx + u * (w / 2.0 + 2.0)) * ss
         yb = max(y1 - k_jos - k_aj * f, y0 + fanta + 1.0)
-        yt = min(y0 + k_sus + k_incl * u * semn + k_as * f, yb - fanta)
+        yt = min(y0 + k_sus + k_incl * u + k_as * f, yb - fanta)   # capatul dinspre nas e la +x
         sus.append((x, yt * ss))
         jos.append((x, yb * ss))
     xa, xb = sus[0][0], sus[-1][0]
@@ -168,25 +216,39 @@ def randeaza_ochi(geo, cheie, latura):
         gros = int(round(max(1.0, (3 + spr) * geo.s) * ss))
         jum = w * 0.40
         by = y0 - 6.0 * geo.s + spr_y
-        p1 = ((cx - jum) * ss, (by - spr_i * semn) * ss)
-        p2 = ((cx + jum) * ss, (by + spr_i * semn) * ss)
+        p1 = ((cx - jum) * ss, (by - spr_i) * ss)
+        p2 = ((cx + jum) * ss, (by + spr_i) * ss)
         d.line([p1, p2], fill=255, width=gros)
         for p in (p1, p2):
             d.ellipse([p[0] - gros / 2.0, p[1] - gros / 2.0, p[0] + gros / 2.0, p[1] + gros / 2.0], fill=255)
 
-    masca = m.resize((bw, bh), Image.Resampling.BOX)
+    masca = m.reduce(ss)
     img = Image.new("RGB", (bw, bh), FUNDAL_RGB)
     if glow:
-        halou = masca.resize((max(1, bw // 4), max(1, bh // 4)), Image.Resampling.BOX)
-        halou = halou.filter(ImageFilter.GaussianBlur(max(1.0, geo.marg_jos / 5.0)))
+        halou = masca.reduce(4).filter(ImageFilter.GaussianBlur(max(1.0, geo.marg_jos / 5.0)))
         halou = ImageChops.multiply(halou.resize((bw, bh), Image.Resampling.BILINEAR), geo.masca_margine())
-        tarie = glow / 8.0 * 0.7
-        img.paste(culoare, (0, 0, bw, bh), halou.point(lambda v: int(v * tarie)))
+        img.paste(culoare, (0, 0, bw, bh), halou.point(_lut(glow / 8.0 * 0.7)))
     img.paste(culoare, (0, 0, bw, bh), masca)
 
+    randari_grele += 1
+    _BAZE_OCHI[cheie_baza] = (img, masca)
+    while len(_BAZE_OCHI) > 96:
+        _BAZE_OCHI.popitem(last=False)
+    return img, masca
+
+
+def randeaza_ochi(geo, cheie, latura):
+    """Ochiul complet. Ochiul din dreapta e oglinda celui din stanga, deci forma se deseneaza o singura data."""
+    baza, masca = _baza_ochi(geo, cheie)
+    if latura == "d":
+        img, masca = ImageOps.mirror(baza), ImageOps.mirror(masca)
+    else:
+        img = baza.copy()
+    px, py, r, culoare = cheie[7], cheie[8], cheie[9], cheie[14]
     if r:
         pupila, alfa, raza = _pupila(r, culoare)
-        bx, by = int(round(cx + px - raza - 1)), int(round(cy + py - raza - 1))
+        bx = int(round(geo.cutie_w / 2.0 + px - raza - 1))
+        by = int(round(geo.cy_local + py - raza - 1))
         cutie = (bx, by, bx + pupila.width, by + pupila.height)
         img.paste(pupila, cutie, ImageChops.multiply(alfa, masca.crop(cutie)))
     return img
@@ -210,6 +272,8 @@ def cheie_gura(geo, st):
 
 
 def randeaza_gura(geo, cheie):
+    """Gura e un singur poligon (buza de sus, buza de jos, grosimea liniei) cu capete rotunjite."""
+    global randari_grele
     a, curb, desch, rot, unda, stramb, gros, glow, culoare = cheie
     ss = SS_GURA
     bw, bh = geo.g_cutie_w, geo.g_sus + geo.g_jos
@@ -218,7 +282,9 @@ def randeaza_gura(geo, cheie):
         return img
     cx, cy = bw / 2.0, float(geo.g_sus)
     putere = 1.0 - 0.5 * rot / 4.0
+    putere_sus = putere if rot < 3 else 0.5
     parte_sus = 0.3 + 0.2 * rot / 4.0   # gura rotunda ("o") se deschide aproape simetric
+    raza = gros / 2.0 * ss
     n = 22
     sus, jos = [], []
     for i in range(n + 1):
@@ -226,24 +292,31 @@ def randeaza_gura(geo, cheie):
         f = max(0.0, 1.0 - u * u)
         yc = cy + curb * (f - 0.5) - stramb * u * 0.5 + unda * math.sin(2.5 * math.pi * u)
         x = (cx + u * a) * ss
-        sus.append((x, (yc - desch * parte_sus * f ** (putere if rot < 3 else 0.5)) * ss))
+        sus.append((x, (yc - desch * parte_sus * f ** putere_sus) * ss))
         jos.append((x, (yc + desch * (1.0 - parte_sus) * f ** (putere * 0.6)) * ss))
+
+    def ingroasa(puncte, semn):
+        # Muta fiecare punct cu jumatate din grosime, perpendicular pe contur, spre exterior
+        rez = []
+        for i, (x, y) in enumerate(puncte):
+            x0, y0 = puncte[max(0, i - 1)]
+            x1, y1 = puncte[min(n, i + 1)]
+            tx, ty = x1 - x0, y1 - y0
+            lung = math.hypot(tx, ty) or 1.0
+            rez.append((x - semn * ty / lung * raza, y + semn * tx / lung * raza))
+        return rez
 
     m = Image.new("L", (bw * ss, bh * ss), 0)
     d = ImageDraw.Draw(m)
-    if desch > 0:
-        d.polygon(sus + jos[::-1], fill=255)
-    g = gros * ss
-    d.line(sus, fill=255, width=g, joint="curve")
-    d.line(jos, fill=255, width=g, joint="curve")
-    for p in (sus[0], sus[-1]):
-        d.ellipse([p[0] - g / 2.0, p[1] - g / 2.0, p[0] + g / 2.0, p[1] + g / 2.0], fill=255)
-    masca = m.resize((bw, bh), Image.Resampling.BOX)
+    d.polygon(ingroasa(sus, -1) + ingroasa(jos, 1)[::-1], fill=255)
+    for x, y in (sus[0], sus[-1]):
+        d.ellipse([x - raza, y - raza, x + raza, y + raza], fill=255)
+    masca = m.reduce(ss)
     if glow:
         halou = masca.filter(ImageFilter.GaussianBlur(3.0 * geo.s))
-        tarie = glow / 8.0 * 0.45
-        img.paste(culoare, (0, 0, bw, bh), halou.point(lambda v: int(v * tarie)))
+        img.paste(culoare, (0, 0, bw, bh), halou.point(_lut(glow / 8.0 * 0.45)))
     img.paste(culoare, (0, 0, bw, bh), masca)
+    randari_grele += 1
     return img
 
 
@@ -254,25 +327,30 @@ def randeaza_roseata(geo, nivel):
     m = Image.new("L", (bw, bh), 0)
     ImageDraw.Draw(m).ellipse([bw * 0.18, bh * 0.28, bw * 0.82, bh * 0.72], fill=255)
     m = m.filter(ImageFilter.GaussianBlur(3.4 * geo.s))
-    tarie = nivel / 4.0 * 0.95
     img = Image.new("RGB", (bw, bh), FUNDAL_RGB)
-    img.paste(ROZ, (0, 0, bw, bh), m.point(lambda v: int(v * tarie)))
+    img.paste(ROZ, (0, 0, bw, bh), m.point(_lut(nivel / 4.0 * 0.95)))
     return img
 
 
 # ------------------------------------------------------------------------------ compunere
 
 def componente(geo, st):
-    """Lista (element, cheie_cache, functie_randare) pentru starea data; functia e None daca elementul e gol."""
+    """Lista (element, cheie_cache, functie_randare, e_greu) pentru starea data.
+
+    functie_randare e None daca elementul e gol; e_greu() spune daca randarea ar desena o imagine de la zero
+    (afisajul face cel mult una pe cadru, ca sa nu tina procesorul ocupat cat robotul asculta).
+    """
     rez = []
     for latura in LATURI:
         k = cheie_ochi(geo, st, latura)
-        rez.append((f"ochi_{latura}", ("ochi", latura, k), lambda k=k, latura=latura: randeaza_ochi(geo, k, latura)))
+        rez.append((f"ochi_{latura}", ("ochi", latura, k), lambda k=k, latura=latura: randeaza_ochi(geo, k, latura),
+                    lambda k=k: not baza_ochi_in_cache(geo, k)))
     kg = cheie_gura(geo, st)
-    rez.append(("gura", ("gura", kg), lambda kg=kg: randeaza_gura(geo, kg)))
+    rez.append(("gura", ("gura", kg), lambda kg=kg: randeaza_gura(geo, kg), lambda: True))
     nivel = int(round(_lim(st["roseata"], 0.0, 1.0) * 4))
     for latura in LATURI:
-        rez.append((f"ros_{latura}", ("ros", nivel), (lambda nivel=nivel: randeaza_roseata(geo, nivel)) if nivel else None))
+        rez.append((f"ros_{latura}", ("ros", nivel), (lambda nivel=nivel: randeaza_roseata(geo, nivel)) if nivel else None,
+                    lambda: False))
     return rez
 
 
@@ -280,7 +358,7 @@ def compune_cadru(geo, st):
     """Cadru complet (pentru export si teste); pe robot se deseneaza doar componentele schimbate."""
     img = Image.new("RGB", (geo.W, geo.H), FUNDAL_RGB)
     cutii = geo.cutii()
-    for element, _cheie, fn in componente(geo, st):
+    for element, _cheie, fn, _greu in componente(geo, st):
         if fn is not None:
             img.paste(fn(), cutii[element][:2])
     return img

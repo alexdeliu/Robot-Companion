@@ -116,5 +116,16 @@
     "dnd_enabled": false,
     "hide_cursor": true,
     "adaptive_idle_polling": false
+  },
+  "face": {
+    "enabled": false,
+    "fps_activ": 20,
+    "fps_idle": 2,
+    "adormire_dupa_sec": 300,
+    "ascunde_controale_dupa_sec": 8,
+    "revenire_dupa_sec": 20,
+    "subtitrare": true,
+    "mini_fata": true,
+    "debug_overlay": false
   }
 }

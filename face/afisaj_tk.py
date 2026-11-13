@@ -9,13 +9,15 @@ from .randare import Geometrie, componente
 
 
 class AfisajFataTk:
-    def __init__(self, parinte, latime=480, inaltime=320, zoom=1, cache_max=240):
+    def __init__(self, parinte, latime=480, inaltime=320, zoom=1, cache_max=None):
         import tkinter as tk
         from PIL import Image, ImageTk
         self._Image, self._ImageTk = Image, ImageTk
         self.geo = Geometrie(latime, inaltime)
         self.zoom = max(1, int(zoom))
-        self.cache_max = cache_max
+        # Imaginile cresc cu patratul scarii, deci pe ecrane mari tinem mai putine in cache
+        scara = self.geo.s * self.zoom
+        self.cache_max = cache_max if cache_max else max(24, int(240 / max(1.0, scara * scara)))
         self.canvas = tk.Canvas(parinte, width=latime * self.zoom, height=inaltime * self.zoom,
                                 bg=FUNDAL, highlightthickness=0, bd=0)
         self._cache = OrderedDict()

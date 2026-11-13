@@ -77,6 +77,7 @@ class RobotCompanionUI:
         self._ultimul_cautare_yt = ""
         self._ultimele_rezultate_yt = []
         self._idx_fata = 0
+        self.fata = None  # fața animată (face/controller.py); rămâne None dacă e dezactivată sau nu pornește
 
         self.monitor_sanatate = MonitorSanatatePi(interval_sec=25)
         self.monitor_sanatate.start()
@@ -228,10 +229,37 @@ class RobotCompanionUI:
         self.frame_kb = tk.Frame(self.root, bg="#1E222A")
         self.construieste_tastatura()
 
+        if CFG.get("face", {}).get("enabled", False):
+            self._porneste_fata()
+
         self._actualizeaza_ceas()
         self.root.after(80, self.adapteaza_toate_butoanele)
         self.entry_input.focus_force()
         self.root.after(150, self.porneste_salut_initial)
+
+    # --- FAȚA ANIMATĂ (opțională, cheia face.enabled) ---
+    def _porneste_fata(self):
+        try:
+            from face.controller import ControllerFata
+            self.fata = ControllerFata(self, CFG.get("face", {}))
+        except Exception as e:
+            self.fata = None
+            logger.error(f"[FACE]: Fața nu a pornit, rămân pe interfața clasică: {type(e).__name__}: {e}")
+
+    def _fata_eveniment(self, nume, **date):
+        """Trimite un eveniment feței; orice eroare o dezactivează fără să atingă restul aplicației."""
+        fata = self.fata
+        if fata is None:
+            return
+        try:
+            fata.eveniment(nume, **date)
+        except Exception as e:
+            self.fata = None
+            logger.error(f"[FACE]: Eroare la evenimentul '{nume}', dezactivez fața: {type(e).__name__}: {e}")
+            try:
+                fata.inchide()
+            except Exception as e2:
+                logger.debug(f"[FACE INCHIDE]: {e2}")
 
     # --- CURSOR ASCUNS PE ECRANUL TACTIL ---
     def _seteaza_cursor(self, nume, widget=None):
@@ -287,6 +315,8 @@ class RobotCompanionUI:
         if self.inchidere_aplicatie:
             return
         self.root.after(0, lambda: self.lbl_wake_debug.config(text=f"Stare: {self.stare} | {text_info}"))
+        if self.fata is not None:
+            self.root.after(0, lambda: self._fata_eveniment("wake_debug", text=text_info))
 
     def toggle_dnd(self):
         self.dnd_activ = not self.dnd_activ
@@ -298,6 +328,7 @@ class RobotCompanionUI:
             opreste_voce()
         else:
             self.btn_dnd.config(text="DND OFF", bg="#282C34")
+        self._fata_eveniment("dnd", activ=self.dnd_activ)
 
     # --- DEBOUNCE & MANAGEMENTUL STĂRII (P3) ---
     def _debounce(self, cheie, functie):
@@ -340,6 +371,7 @@ class RobotCompanionUI:
             elif stare_noua in (RobotState.MUSIC, RobotState.VIDEO):
                 self.btn_send.config(text="➤ TRIMITE", bg="#61AFEF", fg="#1E222A")
                 self.btn_mic.config(text="🎤 MIC", bg="#C678DD", fg="white")
+            self._fata_eveniment("stare", stare=stare_noua)
 
         self.root.after(0, _update)
 
@@ -357,11 +389,13 @@ class RobotCompanionUI:
             self.btn_status.config(text=f"{FETE_IDLE[self._idx_fata]} {temp_txt}")
             if CFG["ui"].get("adaptive_idle_polling", False) and st_hw["temp_c"] >= 70.0:
                 interval_ms = max(interval_ms, 25000)
+        self._fata_eveniment("ceas")
         self.root.after(interval_ms, self._actualizeaza_ceas)
 
     def _declanseaza_alarma_timer(self, mesaj_alarma):
         def _afis():
             self.afiseaza_mesaj("ALARMĂ / TIMER", mesaj_alarma)
+            self._fata_eveniment("alarma")
         self.root.after(0, _afis)
         if not self.dnd_activ:
             threading.Thread(target=vorbeste, args=(mesaj_alarma, "ro"), daemon=True).start()
@@ -402,6 +436,8 @@ class RobotCompanionUI:
         opreste_toate_timerele()
         opreste_voce()
         inchide_overlay_youtube()
+        if self.fata is not None:
+            self.fata.inchide()
         try:
             self.root.destroy()
         except Exception as e:
@@ -877,24 +913,28 @@ class RobotCompanionUI:
         self.text_display.insert(tk.END, f"{expeditor}: {mesaj}\n\n")
         self.text_display.see(tk.END)
         self.text_display.config(state=tk.DISABLED)
+        self._fata_eveniment("mesaj", expeditor=expeditor, text=mesaj)
 
     def _incepe_mesaj_stream(self, expeditor):
         self.text_display.config(state=tk.NORMAL)
         self.text_display.insert(tk.END, f"{expeditor}: ")
         self.text_display.see(tk.END)
         self.text_display.config(state=tk.DISABLED)
+        self._fata_eveniment("stream_start", expeditor=expeditor)
 
     def _adauga_chunk_stream(self, bucata_text):
         self.text_display.config(state=tk.NORMAL)
         self.text_display.insert(tk.END, bucata_text)
         self.text_display.see(tk.END)
         self.text_display.config(state=tk.DISABLED)
+        self._fata_eveniment("stream_chunk", text=bucata_text)
 
     def _incheie_mesaj_stream(self):
         self.text_display.config(state=tk.NORMAL)
         self.text_display.insert(tk.END, "\n\n")
         self.text_display.see(tk.END)
         self.text_display.config(state=tk.DISABLED)
+        self._fata_eveniment("stream_stop")
 
     # --- SALUTUL DINAMIC 100% AI ---
     def porneste_salut_initial(self):
@@ -934,6 +974,7 @@ class RobotCompanionUI:
         self.entry_input.insert(0, text_status)
 
     def actualizeaza_stare_mic(self, faza):
+        self._fata_eveniment("mic", faza=faza)
         if faza == "pregatire":
             self.btn_mic.config(bg="#E5C07B", fg="#1E222A", text="WAIT")
             self.btn_send.config(bg="#4B5263", fg="#ABB2BF", text="PREGĂTESC MIC...")
@@ -988,6 +1029,7 @@ class RobotCompanionUI:
         else:
             self._seteaza_stare_ui(RobotState.MUSIC if este_media_activa() else RobotState.IDLE)
             self.afiseaza_mesaj("Sistem", "Nu am înțeles, repetă te rog.")
+            self.root.after(0, self._fata_eveniment, "neinteles")
             self.porneste_ascultare_wake_word()
 
     # --- TASTATURA VIRTUALĂ ---
@@ -1090,6 +1132,8 @@ class RobotCompanionUI:
             actiune = rez.get("actiune", "vorbeste_normal")
             date_ui = rez.get("date_ui")
             parametru = rez.get("parametru", "")
+            if self.fata is not None:
+                self.root.after(0, lambda: self._fata_eveniment("actiune", actiune=actiune))
 
             if actiune == "arata_status" and isinstance(date_ui, dict):
                 self.root.after(0, self.afiseaza_overlay_status, date_ui)

@@ -19,6 +19,7 @@ CLIPIT_TOTAL = CLIPIT_INCHIDE + CLIPIT_TINE + CLIPIT_DESCHIDE
 PLEOAPA_JOS_LA_CLIPIT = 0.30
 OMEGA_BAZA = 13.0
 AMORTIZARE = 0.78
+BAZE_REPAUS = ("neutru", "obosit")   # doar din aceste expresii de baza poate adormi
 REACTII_ATINGERE = {"tap": ("surprins", 0.7), "mangaiere": ("afectuos", 3.0), "apasare_lunga": ("afectuos", 2.5)}
 
 
@@ -75,7 +76,7 @@ class MotorFata:
             logger.warning(f"[FACE]: Expresie necunoscuta '{nume}', folosesc 'neutru'.")
             nume = "neutru"
         self._baza = nume
-        if nume != "neutru":
+        if nume not in BAZE_REPAUS:
             self.activitate()
         self._recalculeaza_tinta(viteza)
 
@@ -122,6 +123,13 @@ class MotorFata:
         self._stadiu_somn = 3
         self._recalculeaza_tinta(0.5)
 
+    def reapare(self):
+        """Porneste de la ochi inchisi, ca fata sa se deschida animat cand revine pe ecran."""
+        for latura in LATURI:
+            self._val[f"sus_{latura}"] = 0.5
+            self._val[f"jos_{latura}"] = 0.5
+        self.in_miscare = True
+
     def opreste(self):
         """Oprire completa (de exemplu la VIDEO): tick() nu mai produce nimic."""
         self._oprit = True
@@ -160,7 +168,7 @@ class MotorFata:
             self._recalculeaza_tinta(1.0)
         if self.adormire_dupa_sec <= 0 or self._stadiu_somn >= 3:
             return
-        if self._baza != "neutru" or self._reactie or self._vorbire:
+        if self._baza not in BAZE_REPAUS or self._reactie or self._vorbire:
             self._ultima_activitate = acum
             return
         inactiv = acum - self._ultima_activitate

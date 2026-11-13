@@ -32,7 +32,18 @@ class CeasFals:
         return self.t
 
 
+class RngFix:
+    """Generator previzibil: fara clipit dublu la intamplare, ca testele sa dea mereu acelasi rezultat."""
+
+    def random(self):
+        return 0.5
+
+    def uniform(self, a, b):
+        return (a + b) / 2.0
+
+
 def _motor(ceas, **kw):
+    kw.setdefault("rng", RngFix())
     kw.setdefault("respiratie", 0.0)
     kw.setdefault("adormire_dupa_sec", 0)
     motor = MotorFata(ceas=ceas, **kw)
@@ -93,6 +104,13 @@ def test_randare():
             except Exception as e:
                 ok, detaliu = False, f"{nume}: {type(e).__name__}: {e}"
         verifica(f"{latime}x{inaltime}: toate expresiile se randeaza", ok, detaliu)
+    try:
+        for dim in ((96, 64), (72, 48)):
+            for expr in EXPRESII.values():
+                compune_cadru(Geometrie(*dim), expr)
+        verifica("mini-fata se randeaza la dimensiuni foarte mici", True)
+    except Exception as e:
+        verifica("mini-fata se randeaza la dimensiuni foarte mici", False, f"{type(e).__name__}: {e}")
     geo = Geometrie()
     k1 = [c[1] for c in componente(geo, EXPRESII["fericit"])]
     k2 = [c[1] for c in componente(geo, dict(EXPRESII["fericit"]))]

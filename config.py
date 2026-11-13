@@ -67,6 +67,17 @@ _DEFAULT_CFG = {
         "debounce_ms": 250,
         "clock_refresh_ms": 10000,
         "health_refresh_ms": 15000
+    },
+    "face": {
+        "enabled": False,
+        "fps_activ": 20,
+        "fps_idle": 2,
+        "adormire_dupa_sec": 300,
+        "ascunde_controale_dupa_sec": 8,
+        "revenire_dupa_sec": 20,
+        "subtitrare": True,
+        "mini_fata": True,
+        "debug_overlay": False
     }
 }
 

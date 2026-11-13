@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 
@@ -107,5 +108,147 @@ def ruleaza_ui_selftest():
     return 1 if erori else 0
 
 
+def _pompeaza(root, secunde=0.3):
+    """Lasă Tk să proceseze evenimentele și temporizările, ca într-o rulare reală."""
+    final = time.monotonic() + secunde
+    while time.monotonic() < final:
+        root.update()
+        time.sleep(0.01)
+
+
+def ruleaza_test_fata():
+    """Ecranul cu fața animată (face.enabled): moduri, overlay-uri, stări și revenirea la interfața clasică."""
+    import main as modul_main
+    import face.controller as modul_fata
+    from config import CFG
+
+    # Fără Gemini și fără rețea: salutul și răspunsurile sunt înlocuite cu răspunsuri goale
+    modul_main.genereaza_salut_pornire = lambda *a, **kw: {"mesaj": ""}
+    modul_main.proceseaza_comanda_ai = lambda *a, **kw: {"actiune": "vorbeste_normal", "mesaj": ""}
+    # Salutul pornește fire care cheamă Tk; testul nu rulează mainloop, deci îl sărim
+    modul_main.RobotCompanionUI.porneste_salut_initial = lambda self: None
+    CFG.setdefault("face", {})["enabled"] = True
+
+    probleme = []
+    raport = []
+
+    def verifica(nume, conditie):
+        print(f"  [{'OK' if conditie else 'PROBLEMA'}] {nume}")
+        if not conditie:
+            probleme.append(nume)
+
+    print("=" * 78)
+    print(" TEST ECRAN CU FAȚA (face.enabled = true)")
+    print("=" * 78)
+    root = tk.Tk()
+    ui = RobotCompanionUI(root)
+    try:
+        _pompeaza(root, 0.8)
+        ui.oprire_wake_event.set()
+        fata = ui.fata
+        verifica("fața a pornit", fata is not None)
+        if fata is None:
+            return 1
+        sw, sh = ui.screen_width, ui.screen_height
+
+        def deasupra(a, b):
+            copii = root.winfo_children()
+            return copii.index(a) > copii.index(b)
+
+        def atinge():
+            fata._t_comutare = 0.0
+            fata._t_apasare = time.monotonic()
+            fata._mangaiat = False
+            fata._elibereaza(None)
+            _pompeaza(root, 0.15)
+
+        verifica("mod față: fața acoperă barele", fata.mod == "fata" and deasupra(fata.canvas, ui.bara_top)
+                 and deasupra(fata.canvas, ui.bara_jos))
+        atinge()
+        verifica("o atingere aduce barele peste față", fata.mod == "controale" and deasupra(ui.bara_top, fata.canvas)
+                 and deasupra(ui.bara_jos, fata.canvas))
+        ui.adapteaza_toate_butoanele()
+        root.update_idletasks()
+        _colecteaza_butoane(ui.bara_top, "Fata:Controale", raport, sw, sh)
+        _colecteaza_butoane(ui.bara_jos, "Fata:Controale", raport, sw, sh)
+        verifica("MIC, STOP, WAKE, DND și ✕ sunt pe ecran după o atingere",
+                 len(raport) >= 9 and all(r[4] == "OK" for r in raport))
+        atinge()
+        verifica("a doua atingere arată chatul, cu mini-fața în bara de sus",
+                 fata.mod == "chat" and not fata.canvas.winfo_ismapped()
+                 and str(ui.btn_status.cget("image")) != "")
+        fata.arata_fata()
+        _pompeaza(root, 0.1)
+        verifica("revenirea la față scoate mini-fața", fata.mod == "fata" and fata.canvas.winfo_ismapped()
+                 and str(ui.btn_status.cget("image")) == "")
+
+        ui.afiseaza_overlay_status()
+        _pompeaza(root, 0.3)
+        verifica("un overlay retrage fața", fata.mod == "chat" and not fata.canvas.winfo_ismapped())
+        ui.ascunde_overlay()
+        _pompeaza(root, 0.3)
+        verifica("închiderea overlay-ului readuce fața", fata.mod == "fata")
+        ui.toggle_tastatura()
+        _pompeaza(root, 0.3)
+        verifica("tastatura retrage fața", fata.mod == "chat")
+        ui.toggle_tastatura()
+        _pompeaza(root, 0.3)
+        verifica("închiderea tastaturii readuce fața", fata.mod == "fata")
+
+        def stare(nume):
+            ui._seteaza_stare_ui(nume)
+            _pompeaza(root, 0.12)
+            return fata.motor.expresie_curenta
+
+        verifica("LISTENING -> atent", stare("LISTENING") == "atent")
+        verifica("THINKING -> gânditor", stare("THINKING") == "ganditor")
+        ui._fata_eveniment("actiune", actiune="spune_gluma")
+        verifica("glumă: vorbește ironic", stare("SPEAKING") == "ironic")
+        verifica("glumă: râde la final", stare("IDLE") == "ras")
+        stare("VIDEO")
+        verifica("VIDEO oprește complet fața", fata.motor.oprit)
+        stare("IDLE")
+        verifica("după VIDEO fața repornește", not fata.motor.oprit)
+        ui._fata_eveniment("dnd", activ=True)
+        verifica("DND adoarme fața", fata.motor.stadiu_somn == 3)
+        ui._fata_eveniment("dnd", activ=False)
+        verifica("ieșirea din DND o trezește", fata.motor.stadiu_somn == 0)
+        ui.afiseaza_mesaj("Tu", "salut robot")
+        verifica("ce spui apare ca subtitrare", "salut robot" in fata.canvas.itemcget(fata._txt_sub, "text"))
+
+        def _strica(*a, **kw):
+            raise RuntimeError("eroare simulată de test")
+
+        fata.motor.tick = _strica
+        fata.arata_fata()
+        _pompeaza(root, 0.3)
+        verifica("o eroare în față o dezactivează și lasă interfața clasică",
+                 ui.fata is None and not fata.canvas.winfo_ismapped())
+        ui.afiseaza_mesaj("Sistem", "Interfața clasică merge în continuare.")
+        ui._seteaza_stare_ui("IDLE")
+        _pompeaza(root, 0.1)
+        verifica("interfața clasică rămâne funcțională", ui.text_display.winfo_ismapped())
+        original = modul_fata.ControllerFata
+        modul_fata.ControllerFata = _strica
+        try:
+            ui._porneste_fata()
+        finally:
+            modul_fata.ControllerFata = original
+        verifica("dacă fața nu pornește, aplicația merge mai departe", ui.fata is None)
+    finally:
+        CFG["face"]["enabled"] = False
+        ui.inchide_curat()
+
+    print("-" * 78)
+    for ecran, txt, dim, tw, st in raport:
+        print(f"{ecran:<18} | {txt:<18} | {dim:<9} | {tw:<7} | {st}")
+    print("=" * 78)
+    print(f"TEST FAȚĂ: {len(probleme)} PROBLEME")
+    print("=" * 78)
+    return 1 if probleme else 0
+
+
 if __name__ == "__main__":
-    sys.exit(ruleaza_ui_selftest())
+    cod = ruleaza_ui_selftest()
+    cod_fata = ruleaza_test_fata()
+    sys.exit(1 if (cod or cod_fata) else 0)

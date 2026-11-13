@@ -13,7 +13,7 @@ from .parametri import FUNDAL_RGB, LATURI, hex_rgb
 
 SS_OCHI = 2
 SS_GURA = 3
-FANTA_MIN = 7          # ochiul inchis ramane o linie luminoasa de atatia pixeli
+FANTA_MIN = 7          # ochiul inchis ramane o linie luminoasa de atatia pixeli (la 480x320)
 ROZ = hex_rgb("#E06C75")
 RAPORT_IRIS = 1.34      # irisul (o nuanta mai inchisa a ochiului) e cu atat mai mare decat pupila
 _PUPILE = {}
@@ -149,14 +149,15 @@ def randeaza_ochi(geo, cheie, latura):
     d = ImageDraw.Draw(m)
     d.rounded_rectangle([x0 * ss, y0 * ss, x1 * ss, y1 * ss], radius=min(w, h) * 0.44 * ss, fill=255)
 
+    fanta = max(2.0, FANTA_MIN * geo.s)
     n = 14
     sus, jos = [], []
     for i in range(n + 1):
         u = -1.0 + 2.0 * i / n
         f = 1.0 - u * u
         x = (cx + u * (w / 2.0 + 2.0)) * ss
-        yb = max(y1 - k_jos - k_aj * f, y0 + FANTA_MIN + 1.0)
-        yt = min(y0 + k_sus + k_incl * u * semn + k_as * f, yb - FANTA_MIN)
+        yb = max(y1 - k_jos - k_aj * f, y0 + fanta + 1.0)
+        yt = min(y0 + k_sus + k_incl * u * semn + k_as * f, yb - fanta)
         sus.append((x, yt * ss))
         jos.append((x, yb * ss))
     xa, xb = sus[0][0], sus[-1][0]
@@ -164,7 +165,7 @@ def randeaza_ochi(geo, cheie, latura):
     d.polygon([(xa, bh * ss), (xb, bh * ss)] + jos[::-1], fill=0)
 
     if spr:
-        gros = (3 + spr) * ss
+        gros = int(round(max(1.0, (3 + spr) * geo.s) * ss))
         jum = w * 0.40
         by = y0 - 6.0 * geo.s + spr_y
         p1 = ((cx - jum) * ss, (by - spr_i * semn) * ss)

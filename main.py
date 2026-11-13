@@ -241,10 +241,23 @@ class RobotCompanionUI:
     def _porneste_fata(self):
         try:
             from face.controller import ControllerFata
+            from voice.speak import seteaza_callback_redare
             self.fata = ControllerFata(self, CFG.get("face", {}))
+            seteaza_callback_redare(self._la_redare_voce)
         except Exception as e:
             self.fata = None
             logger.error(f"[FACE]: Fața nu a pornit, rămân pe interfața clasică: {type(e).__name__}: {e}")
+
+    def _la_redare_voce(self, eveniment, **date):
+        """Chemată de voice.speak din firul vocii: fața își pornește sau își oprește gura."""
+        fata = self.fata
+        if fata is None or self.inchidere_aplicatie:
+            return
+        try:
+            fata.la_redare(eveniment, **date)
+            self.root.after(0, self._fata_eveniment, "voce")
+        except Exception as e:
+            logger.debug(f"[FACE REDARE]: {e}")
 
     def _fata_eveniment(self, nume, **date):
         """Trimite un eveniment feței; orice eroare o dezactivează fără să atingă restul aplicației."""

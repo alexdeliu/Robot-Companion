@@ -4,15 +4,15 @@ imaginea vine din cache sau se randeaza o singura data cu Pillow. Se apeleaza do
 """
 from collections import OrderedDict
 
-from .parametri import FUNDAL
+from .parametri import FUNDAL, FUNDAL_RGB
 from .randare import Geometrie, componente
 
 
 class AfisajFataTk:
     def __init__(self, parinte, latime=480, inaltime=320, zoom=1, cache_max=None):
         import tkinter as tk
-        from PIL import Image, ImageTk
-        self._Image, self._ImageTk = Image, ImageTk
+        from PIL import Image, ImageChops, ImageTk
+        self._Image, self._ImageChops, self._ImageTk = Image, ImageChops, ImageTk
         self.geo = Geometrie(latime, inaltime)
         self.zoom = max(1, int(zoom))
         # Imaginile cresc cu patratul scarii, deci pe ecrane mari tinem mai putine in cache
@@ -23,6 +23,7 @@ class AfisajFataTk:
         self._cache = OrderedDict()
         self._afisat = {}
         self._chei = {}
+        self._randuri = {}
         self._elemente = {}
         self.randari = 0
         for nume, cutie in self.geo.cutii().items():
@@ -30,19 +31,26 @@ class AfisajFataTk:
             self._elemente[nume] = (item, cutie)
 
     def _foto(self, cheie, fn):
-        foto = self._cache.get(cheie)
-        if foto is not None:
+        """(imagine Tk, deplasare x, deplasare y, inaltime) pentru cheia data, decupata la continut."""
+        intrare = self._cache.get(cheie)
+        if intrare is not None:
             self._cache.move_to_end(cheie)
-            return foto
+            return intrare
         img = fn()
-        if self.zoom > 1:
-            img = img.resize((img.width * self.zoom, img.height * self.zoom), self._Image.Resampling.NEAREST)
-        foto = self._ImageTk.PhotoImage(img)
+        # Pastram doar zona care difera de fundal: pe ecranul SPI costul creste cu randurile atinse
+        cutie = self._ImageChops.difference(img, self._Image.new("RGB", img.size, FUNDAL_RGB)).getbbox()
+        if cutie is None:
+            intrare = ("", 0, 0, 0)
+        else:
+            img = img.crop(cutie)
+            if self.zoom > 1:
+                img = img.resize((img.width * self.zoom, img.height * self.zoom), self._Image.Resampling.NEAREST)
+            intrare = (self._ImageTk.PhotoImage(img), cutie[0], cutie[1], cutie[3] - cutie[1])
         self.randari += 1
-        self._cache[cheie] = foto
+        self._cache[cheie] = intrare
         while len(self._cache) > self.cache_max:
             self._cache.popitem(last=False)
-        return foto
+        return intrare
 
     def aplica(self, st):
         """Deseneaza starea. Intoarce intervalele de randuri modificate, pentru statistici."""
@@ -51,12 +59,16 @@ class AfisajFataTk:
             if self._chei.get(nume) == cheie:
                 continue
             item, cutie = self._elemente[nume]
-            foto = self._foto(cheie, fn) if fn is not None else ""
+            foto, dx, dy, inalt = self._foto(cheie, fn) if fn is not None else ("", 0, 0, 0)
+            self.canvas.coords(item, (cutie[0] + dx) * self.zoom, (cutie[1] + dy) * self.zoom)
             self.canvas.itemconfig(item, image=foto)
             # Referinta tine imaginea in viata chiar daca iese din cache cat timp e pe ecran
             self._afisat[nume] = foto
             self._chei[nume] = cheie
-            modificate.append((cutie[1], cutie[3]))
+            nou = (cutie[1] + dy, cutie[1] + dy + inalt)
+            vechi = self._randuri.get(nume, nou)
+            self._randuri[nume] = nou
+            modificate.append((min(vechi[0], nou[0]), max(vechi[1], nou[1])))
         return modificate
 
     def goleste_cache(self):

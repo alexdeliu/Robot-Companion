@@ -39,6 +39,25 @@ _DICT_IMPLICIT = {
 }
 
 
+_CALLBACK_REDARE = None
+
+
+def seteaza_callback_redare(cb):
+    """Fața animată se abonează la momentele redării (pentru mișcarea gurii). Nu schimbă vocea."""
+    global _CALLBACK_REDARE
+    _CALLBACK_REDARE = cb
+
+
+def _notifica_redare(eveniment, **date):
+    cb = _CALLBACK_REDARE
+    if cb is None:
+        return
+    try:
+        cb(eveniment, **date)
+    except Exception as e:
+        logger.debug(f"[CALLBACK REDARE]: {e}")
+
+
 def este_vorbire_activa():
     return _ESTE_VORBIRE_ACTIVA
 
@@ -116,6 +135,7 @@ def opreste_voce():
     """Oprește imediat redarea vocală curentă (Barge-In sigur)."""
     global _PROCES_CURENT_MPG123, _ESTE_VORBIRE_ACTIVA, _ULTIMA_VORBIRE_FINAL
     _ANULARE_VORBIRE.set()
+    _notifica_redare("oprit")
     proc = _PROCES_CURENT_MPG123
     if proc and proc.poll() is None:
         try:
@@ -150,6 +170,7 @@ def _reda_fisier_audio(cale_fisier):
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
+        _notifica_redare("pornit", t=time.monotonic())
         _PROCES_CURENT_MPG123.wait()
         _PROCES_CURENT_MPG123 = None
         return
@@ -162,6 +183,7 @@ def _reda_fisier_audio(cale_fisier):
 
     pygame.mixer.music.load(cale_fisier)
     pygame.mixer.music.play()
+    _notifica_redare("pornit", t=time.monotonic())
     while pygame.mixer.music.get_busy() and not _ANULARE_VORBIRE.is_set():
         time.sleep(0.03)
     pygame.mixer.music.unload()
@@ -194,10 +216,12 @@ def vorbeste(text, limba="ro"):
                 return
             if DEBUG:
                 logger.info(f"[TIMPI DEBUG]: Sinteză TTS gata în {time.perf_counter() - t0:.2f}s -> Redau în boxe...")
+            _notifica_redare("pregatit", cale=cale_temp)
             _reda_fisier_audio(cale_temp)
         except Exception as e:
             logger.error(f"[EROARE VOCE]: Nu am putut reda sunetul ({e})")
         finally:
+            _notifica_redare("oprit")
             _ESTE_VORBIRE_ACTIVA = False
             _ULTIMA_VORBIRE_FINAL = time.monotonic()
             try:

@@ -70,8 +70,10 @@ _DEFAULT_CFG = {
     },
     "face": {
         "enabled": False,
-        "fps_activ": 20,
-        "fps_idle": 2,
+        "fps_activ": 30,
+        "fps_idle": 1,
+        "lipsync": True,
+        "lipsync_offset_ms": None,
         "adormire_dupa_sec": 300,
         "ascunde_controale_dupa_sec": 8,
         "revenire_dupa_sec": 20,

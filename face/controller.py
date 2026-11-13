@@ -16,6 +16,7 @@ import threading
 import time
 
 from .afisaj_tk import AfisajFataTk
+from .lipsync import LipSync
 from .motor import MotorFata
 from .parametri import EXPRESII
 from .randare import Geometrie, compune_cadru
@@ -60,8 +61,11 @@ class ControllerFata:
         self._lat, self._inalt = latime, inaltime
 
         self.motor = MotorFata(
-            fps_activ=self.cfg.get("fps_activ", 20), fps_idle=self.cfg.get("fps_idle", 2),
+            fps_activ=self.cfg.get("fps_activ", 30), fps_idle=self.cfg.get("fps_idle", 1),
             adormire_dupa_sec=self.cfg.get("adormire_dupa_sec", 300))
+        self.lipsync = LipSync(self.cfg.get("lipsync_offset_ms"))
+        self._voce_activa = False
+        self._avertizat_lipsync = False
 
         self.mod = "fata"
         self._chat_fortat = False
@@ -122,6 +126,29 @@ class ControllerFata:
             self._goleste_coada()
             self._programeaza_acum()
 
+    def la_redare(self, eveniment, **date):
+        """Momentele redarii vocii, din firul vocii (voice/speak.py). Sigur intre fire, fara Tk."""
+        if self._inchis or not self.cfg.get("lipsync", True):
+            return
+        if eveniment == "pregatit":
+            self.lipsync.pregateste(date.get("cale"))
+        elif eveniment == "pornit":
+            self.lipsync.porneste(date.get("t"))
+        elif eveniment == "oprit":
+            self.lipsync.opreste()
+
+    def _sincronizeaza_voce(self):
+        """Duce nivelul vocii la gura; la oprire (sau barge-in) gura se inchide in acelasi cadru."""
+        activ, nivel, forma = self.lipsync.citeste()
+        if activ != self._voce_activa:
+            self._voce_activa = activ
+            self.motor.seteaza_vorbire(activ)
+        if activ:
+            self.motor.seteaza_nivel_gura(nivel, forma)
+            if self.lipsync.fara_date and not self._avertizat_lipsync:
+                self._avertizat_lipsync = True
+                logger.warning("[FACE]: Nu am putut citi sunetul vocii; gura se misca aproximativ, nu dupa voce.")
+
     def _goleste_coada(self):
         while True:
             try:
@@ -147,6 +174,7 @@ class ControllerFata:
             return
         try:
             self._goleste_coada()
+            self._sincronizeaza_voce()
             if self.mod == "chat" or self.motor.oprit:
                 pauza = 2.0   # fata nu se vede: nu desenam nimic, doar golim coada din cand in cand
             else:
@@ -507,6 +535,9 @@ class ControllerFata:
 
     def _ev_stream_stop(self):
         self._seteaza_subtitrare(self._scurteaza(self._buffer_stream))
+
+    def _ev_voce(self):
+        """Vocea a pornit sau s-a oprit; bucla e deja trezita, iar gura se sincronizeaza la urmatorul cadru."""
 
     def _ev_expresie(self, nume, viteza=1.0):
         self.motor.seteaza_expresie(nume, viteza)

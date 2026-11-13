@@ -28,7 +28,7 @@ def _limiteaza(v, jos=0.0, sus=1.0):
 
 
 class MotorFata:
-    def __init__(self, ceas=time.monotonic, rng=None, fps_activ=30, fps_idle=2,
+    def __init__(self, ceas=time.monotonic, rng=None, fps_activ=30, fps_idle=1,
                  adormire_dupa_sec=300.0, respiratie=0.10):
         self._ceas = ceas
         self._rng = rng or random.Random()
@@ -51,6 +51,9 @@ class MotorFata:
         self._vorbire = False
         self._nivel_gura = 0.0
         self._gura_afisata = 0.0
+        self._forma_gura = 0.5        # 0 = sunet inchis (o, u, a): gura rotunda; 1 = sunet ascutit (i, e, s): lata
+        self._forma_afisata = 0.5
+        self._resorturi_active = True
 
         self._clipit_t0 = None
         self._urm_clipit = acum + self._rng.uniform(1.5, 4.0)
@@ -98,13 +101,19 @@ class MotorFata:
         self._vorbire = bool(activ)
         if self._vorbire:
             self.activitate()
+            # Cat vorbeste priveste in fata: se misca doar gura, deci ecranul redeseneaza putine randuri
+            self.privire.seteaza(0.0, 0.0, sursa="idle", timeout_s=None)
         else:
             self._nivel_gura = 0.0
             self._gura_afisata = 0.0
+            self._urm_sacada = self._ceas() + self._rng.uniform(0.6, 1.6)
         self.in_miscare = True
 
-    def seteaza_nivel_gura(self, nivel):
+    def seteaza_nivel_gura(self, nivel, forma=None):
+        """nivel = cat de deschisa e gura (0..1); forma = 0 sunet inchis/rotund .. 1 sunet ascutit/lat."""
         self._nivel_gura = _limiteaza(float(nivel))
+        if forma is not None:
+            self._forma_gura = _limiteaza(float(forma))
 
     def activitate(self):
         """Orice eveniment care arata ca robotul e folosit: amana somnul si il trezeste daca dormea."""
@@ -128,6 +137,7 @@ class MotorFata:
         for latura in LATURI:
             self._val[f"sus_{latura}"] = 0.5
             self._val[f"jos_{latura}"] = 0.5
+        self._resorturi_active = True
         self.in_miscare = True
 
     def opreste(self):
@@ -156,6 +166,7 @@ class MotorFata:
         self._nume_tinta = nume
         self._tinta = EXPRESII[nume]
         self._omega = OMEGA_BAZA * max(0.2, float(viteza))
+        self._resorturi_active = True
         self.in_miscare = True
 
     def _praguri_somn(self):
@@ -178,6 +189,8 @@ class MotorFata:
             self._recalculeaza_tinta(0.45)
 
     def _pas_resorturi(self, dt):
+        if not self._resorturi_active:
+            return False
         miscare = False
         pasi = max(1, int(dt / 0.008 + 0.999))
         h = dt / pasi
@@ -195,6 +208,7 @@ class MotorFata:
                 x += v * h
             val[cheie], vit[cheie] = x, v
             miscare = True
+        self._resorturi_active = miscare
         return miscare
 
     def _nivel_clipit(self, acum):
@@ -210,8 +224,12 @@ class MotorFata:
         e = acum - self._clipit_t0
         if e >= CLIPIT_TOTAL:
             self._clipit_t0 = None
-            dublu = self._rng.random() < 0.18
-            self._urm_clipit = acum + (0.11 if dublu else self._rng.uniform(2.6, 6.5))
+            if self._vorbire:
+                # La vorbire clipeste mai rar: un clipit redeseneaza ochii si intrerupe o clipa miscarea gurii
+                self._urm_clipit = acum + self._rng.uniform(4.5, 8.0)
+            else:
+                dublu = self._rng.random() < 0.18
+                self._urm_clipit = acum + (0.11 if dublu else self._rng.uniform(2.6, 6.5))
             return 0.0
         if e < CLIPIT_INCHIDE:
             a = e / CLIPIT_INCHIDE
@@ -222,7 +240,7 @@ class MotorFata:
         return a * a * (3.0 - 2.0 * a)
 
     def _privire_idle(self, acum):
-        if acum < self._urm_sacada:
+        if self._vorbire or acum < self._urm_sacada:
             return
         if self._stadiu_somn >= 2:
             self.privire.seteaza(0.0, 0.0, sursa="idle", timeout_s=None)
@@ -260,9 +278,8 @@ class MotorFata:
                 st[f"jos_{latura}"] = jos_e
                 st[f"sus_{latura}"] = sus + max(0.0, 1.0 - jos_e - sus) * clipit
 
-        amplitudine = 0.35 if self._vorbire else 1.0
-        st["px"] = _limiteaza(st["px"] + gx * amplitudine, -1.0, 1.0)
-        st["py"] = _limiteaza(st["py"] + gy * amplitudine, -1.0, 1.0)
+        st["px"] = _limiteaza(st["px"] + gx, -1.0, 1.0)
+        st["py"] = _limiteaza(st["py"] + gy, -1.0, 1.0)
 
         gura_in_miscare = False
         if self._vorbire or self._gura_afisata > 0.0:
@@ -270,14 +287,16 @@ class MotorFata:
             self._gura_afisata = max(self._nivel_gura, anterior - dt * 9.0) if self._vorbire else 0.0
             gura_in_miscare = self._vorbire or self._gura_afisata != anterior
             n = self._gura_afisata
-            st["g_desch"] = max(st["g_desch"], n)
-            st["g_rot"] = _limiteaza(st["g_rot"] + 0.35 * n)
+            self._forma_afisata += (self._forma_gura - self._forma_afisata) * min(1.0, dt * 14.0)
+            f = self._forma_afisata
+            st["g_desch"] = max(st["g_desch"], n * (1.0 - 0.4 * f))
+            st["g_rot"] = _limiteaza(st["g_rot"] + 0.5 * n * (1.0 - f))
             st["g_curb"] *= 1.0 - 0.55 * n
-            st["g_lat"] *= 1.0 - 0.15 * n
+            st["g_lat"] *= 1.0 - 0.2 * n * (1.0 - f) + 0.12 * f * min(1.0, 2.0 * n)
 
-        if self.respiratie > 0.0:
-            adanc = 2.2 if self._stadiu_somn >= 3 else 1.0
-            st["glow"] *= 1.0 + self.respiratie * adanc * math.sin(2.0 * math.pi * acum / 4.6)
+        # Respiratia se vede doar in somn; treaz ar redesena ochii degeaba pe ecranul lent
+        if self.respiratie > 0.0 and self._stadiu_somn >= 3:
+            st["glow"] *= 1.0 + self.respiratie * 2.2 * math.sin(2.0 * math.pi * acum / 4.6)
 
         self.in_miscare = miscare or clipit > 0.0 or misca_privirea or gura_in_miscare
         return st
@@ -287,8 +306,7 @@ class MotorFata:
         if self.in_miscare:
             return 1.0 / self.fps_activ
         acum = self._ceas() if acum is None else acum
-        asteptari = [1.0 / self.fps_idle if self.respiratie > 0.0 else 2.0,
-                     self._urm_clipit - acum, self._urm_sacada - acum]
+        asteptari = [1.0 / self.fps_idle, self._urm_clipit - acum, self._urm_sacada - acum]
         if self._reactie:
             asteptari.append(self._reactie[1] - acum)
         if self._stadiu_somn >= 3:

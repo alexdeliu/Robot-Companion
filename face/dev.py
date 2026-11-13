@@ -5,14 +5,16 @@ Modul de dezvoltare al fetei, pe PC (fara microfon, fara Gemini, fara robot).
   python -m face.dev --export DIR    planse PNG cu toate expresiile si cu tranzitii
 
 In fereastra: butoanele schimba expresia, mouse-ul deasupra fetei muta privirea, click = atingere,
-tragere = mangaiere. Tastele: spatiu = vorbire simulata, f = flux complet, s = somn, t = trezire.
+tragere = mangaiere. Tastele: spatiu = vorbire simulata, v = voce reala (edge-tts, are nevoie de internet),
+f = flux complet, s = somn, t = trezire.
 """
 import argparse
-import math
 import os
 import sys
+import threading
 import time
 
+from .lipsync import LipSync, nivel_simulat
 from .motor import MotorFata
 from .parametri import EXPRESII, FUNDAL
 from .randare import Geometrie, compune_cadru
@@ -34,14 +36,6 @@ def _font(marime, bold=False):
         except OSError:
             continue
     return ImageFont.load_default()
-
-
-def nivel_vorbire_simulat(t):
-    """Anvelopa de amplitudine artificiala, cu silabe si pauze, pentru testarea gurii."""
-    silaba = abs(math.sin(2 * math.pi * 3.3 * t))
-    fraza = 0.55 + 0.45 * math.sin(2 * math.pi * 0.6 * t)
-    pauza = 0.0 if (t % 2.6) > 2.2 else 1.0
-    return max(0.0, silaba * fraza * pauza)
 
 
 def _motor_linistit(ceas):
@@ -116,10 +110,10 @@ def exporta(director, latime, inaltime):
     _avanseaza(motor, ceas, 1.0)
     motor.seteaza_vorbire(True)
     cadre = []
-    for nivel in (0.0, 0.25, 0.6, 1.0, 0.7, 0.35, 0.85, 0.1):
-        motor.seteaza_nivel_gura(nivel)
-        cadre.append(compune_cadru(geo, _avanseaza(motor, ceas, 1.0 / 30)))
-    secvente.append(("vorbire: nivel 0 / .25 / .6 / 1 / .7 / .35 / .85 / .1", cadre))
+    for nivel, forma in ((0.0, 0.5), (0.35, 0.0), (0.7, 0.0), (1.0, 0.0), (0.7, 0.5), (0.5, 1.0), (1.0, 1.0), (0.2, 1.0)):
+        motor.seteaza_nivel_gura(nivel, forma)
+        cadre.append(compune_cadru(geo, _avanseaza(motor, ceas, 0.3)))
+    secvente.append(("vorbire: inchisa | o, u, a: .35 / .7 / 1 | intre | i, e, s: .5 / 1 / .2", cadre))
 
     mw, mh = latime // 2, (y1 - y0) // 2
     banda = Image.new("RGB", (8 * mw, len(secvente) * (mh + eticheta_h)), fundal_plansa)
@@ -134,7 +128,10 @@ def exporta(director, latime, inaltime):
     print(f"Export gata in {director}: {len(nume)} expresii, banda fetei = randurile {geo.banda()}")
 
 
-def ruleaza_interactiv(latime, inaltime, zoom, auto_inchide=0.0):
+FRAZA_TEST = "Salut! Sunt robotul tău de birou. Uite, acum îmi mișc gura exact după ce spun."
+
+
+def ruleaza_interactiv(latime, inaltime, zoom, auto_inchide=0.0, fraza=FRAZA_TEST):
     import tkinter as tk
     from .afisaj_tk import AfisajFataTk
 
@@ -150,7 +147,8 @@ def ruleaza_interactiv(latime, inaltime, zoom, auto_inchide=0.0):
     panou = tk.Frame(root, bg=FUNDAL)
     panou.pack(fill="x", padx=4, pady=4)
     stare = {"vorbire": False, "t_vorbire": 0.0, "tick": 0, "desen": 0, "t_stat": time.monotonic(),
-             "cpu": time.process_time(), "trage": 0}
+             "cpu": time.process_time(), "trage": 0, "voce": False}
+    lipsync = LipSync()
 
     for i, nume in enumerate(EXPRESII):
         tk.Button(panou, text=nume, font=("Arial", 8), bg="#282C34", fg="#ABB2BF", relief="flat", width=11,
@@ -160,6 +158,25 @@ def ruleaza_interactiv(latime, inaltime, zoom, auto_inchide=0.0):
         stare["vorbire"] = not stare["vorbire"]
         stare["t_vorbire"] = time.monotonic()
         motor.seteaza_vorbire(stare["vorbire"])
+
+    def voce_reala(_e=None):
+        """Spune fraza de test cu vocea reala a robotului; gura urmeaza sunetul redat."""
+        try:
+            from voice import speak
+        except Exception as e:
+            info.config(text=f"Vocea reala nu e disponibila: {e}")
+            return
+
+        def la_redare(eveniment, **date):
+            if eveniment == "pregatit":
+                lipsync.pregateste(date.get("cale"))
+            elif eveniment == "pornit":
+                lipsync.porneste(date.get("t"))
+            elif eveniment == "oprit":
+                lipsync.opreste()
+
+        speak.seteaza_callback_redare(la_redare)
+        threading.Thread(target=speak.vorbeste, args=(fraza, "ro"), name="DevVoce", daemon=True).start()
 
     def flux(_e=None):
         pasi = [(0, lambda: motor.reactie("surprins", 0.5, 2.2)), (500, lambda: motor.seteaza_expresie("atent")),
@@ -172,12 +189,13 @@ def ruleaza_interactiv(latime, inaltime, zoom, auto_inchide=0.0):
 
     comenzi = tk.Frame(root, bg=FUNDAL)
     comenzi.pack(fill="x", padx=4, pady=(0, 6))
-    for text, fn in (("vorbire (spatiu)", comuta_vorbire), ("flux complet (f)", flux),
+    for text, fn in (("vorbire (spatiu)", comuta_vorbire), ("voce reala (v)", voce_reala), ("flux complet (f)", flux),
                      ("somn (s)", lambda _e=None: motor.adoarme()), ("trezire (t)", lambda _e=None: motor.activitate())):
         tk.Button(comenzi, text=text, font=("Arial", 9, "bold"), bg="#3B4252", fg="white", relief="flat",
                   command=fn).pack(side="left", padx=2)
     root.bind("<space>", comuta_vorbire)
     root.bind("f", flux)
+    root.bind("v", voce_reala)
     root.bind("s", lambda _e: motor.adoarme())
     root.bind("t", lambda _e: motor.activitate())
 
@@ -202,8 +220,14 @@ def ruleaza_interactiv(latime, inaltime, zoom, auto_inchide=0.0):
     afisaj.canvas.bind("<ButtonRelease-1>", elibereaza)
 
     def tick():
-        if stare["vorbire"]:
-            motor.seteaza_nivel_gura(nivel_vorbire_simulat(time.monotonic() - stare["t_vorbire"]))
+        activ, nivel, forma = lipsync.citeste()
+        if activ != stare["voce"]:
+            stare["voce"] = activ
+            motor.seteaza_vorbire(activ or stare["vorbire"])
+        if activ:
+            motor.seteaza_nivel_gura(nivel, forma)
+        elif stare["vorbire"]:
+            motor.seteaza_nivel_gura(nivel_simulat(time.monotonic() - stare["t_vorbire"]), 0.3)
         st = motor.tick()
         stare["tick"] += 1
         if st is not None and afisaj.aplica(st):
@@ -230,11 +254,12 @@ def main():
     ap.add_argument("--inaltime", type=int, default=320)
     ap.add_argument("--zoom", type=int, default=2)
     ap.add_argument("--auto-inchide", type=float, default=0.0, help="inchide fereastra dupa atatea secunde (test)")
+    ap.add_argument("--fraza", default=FRAZA_TEST, help="ce spune robotul la tasta v (voce reala)")
     args = ap.parse_args()
     if args.export:
         exporta(args.export, args.latime, args.inaltime)
     else:
-        ruleaza_interactiv(args.latime, args.inaltime, args.zoom, args.auto_inchide)
+        ruleaza_interactiv(args.latime, args.inaltime, args.zoom, args.auto_inchide, args.fraza)
     return 0
 
 

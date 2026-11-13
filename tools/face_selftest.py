@@ -11,6 +11,11 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
+import math
+from array import array
+
+import face.lipsync as modul_lipsync
+from face.lipsync import LipSync, analizeaza_fereastra
 from face.motor import MotorFata, CLIPIT_INCHIDE
 from face.parametri import EXPRESII, expresie
 from face.privire import ManagerPrivire
@@ -151,9 +156,16 @@ def test_motor():
     verifica("dupa clipit ochii se redeschid", all(st[f"sus_{l}"] < 0.02 for l in "sd"))
 
     motor.seteaza_vorbire(True)
-    motor.seteaza_nivel_gura(1.0)
-    st = _avanseaza(motor, ceas, 0.1)
-    verifica("vorbirea deschide gura", st["g_desch"] > 0.98)
+    motor.seteaza_nivel_gura(1.0, forma=0.0)
+    st_rotund = _avanseaza(motor, ceas, 0.4)
+    verifica("vorbirea deschide gura", st_rotund["g_desch"] > 0.98)
+    motor.seteaza_nivel_gura(1.0, forma=1.0)
+    st_lat = _avanseaza(motor, ceas, 0.4)
+    verifica("sunetele inchise rotunjesc gura, cele ascutite o latesc",
+             st_rotund["g_rot"] > st_lat["g_rot"] + 0.3 and st_lat["g_lat"] > st_rotund["g_lat"] + 0.1
+             and st_lat["g_desch"] < st_rotund["g_desch"])
+    verifica("cat vorbeste priveste in fata", motor.privire.tinta()[:2] == (0.0, 0.0))
+    st = st_lat
     motor.seteaza_vorbire(False)
     ceas.t += 1.0 / 30
     st = motor.tick()
@@ -230,6 +242,82 @@ def test_privire():
     verifica("scrieri din mai multe fire nu dau erori", not erori, str(erori[:1]))
 
 
+def _pcm_test():
+    """2 s la 16 kHz: liniste 1 s, apoi 0,5 s sunet grav (200 Hz), apoi 0,5 s sunet ascutit."""
+    es = array("h", [0] * 16000)
+    es.extend(int(8000 * math.sin(2 * math.pi * 200 * i / 16000.0)) for i in range(8000))
+    es.extend(6000 if i % 2 else -6000 for i in range(8000))
+    if sys.byteorder == "big":
+        es.byteswap()
+    return es.tobytes()
+
+
+def test_lipsync():
+    print("Lip-sync")
+    raw = _pcm_test()
+    ls = LipSync(offset_ms=0)
+    verifica("fara voce gura e inactiva", ls.citeste(50.0) == (False, 0.0, 0.5))
+    ls.incarca_pcm(raw)
+    ls.porneste(t=100.0)
+    verifica("durata anvelopei = durata sunetului", abs(ls.durata_s - 2.0) < 0.03, f"{ls.durata_s:.3f}")
+    activ, nivel, _forma = ls.citeste(100.5)
+    verifica("in liniste gura sta inchisa", activ and nivel == 0.0)
+    _a, nivel_grav, forma_grav = ls.citeste(101.25)
+    verifica("sunet grav: gura deschisa, forma rotunda", nivel_grav > 0.8 and forma_grav < 0.3,
+             f"nivel {nivel_grav:.2f} forma {forma_grav:.2f}")
+    _a, nivel_ascutit, forma_ascutit = ls.citeste(101.75)
+    verifica("sunet ascutit: forma lata", nivel_ascutit > 0.5 and forma_ascutit > 0.8,
+             f"nivel {nivel_ascutit:.2f} forma {forma_ascutit:.2f}")
+    inceput = next((k for k in range(0, 2000) if ls.citeste(100.0 + k / 1000.0)[1] > 0.3), None)
+    verifica("gura se deschide la cel mult 40 ms de inceputul sunetului",
+             inceput is not None and 960 <= inceput <= 1040, f"la {inceput} ms")
+    verifica("dupa sfarsitul sunetului gura e inchisa", ls.citeste(102.5)[1] == 0.0)
+    ls.opreste()
+    verifica("oprirea inchide gura imediat", ls.citeste(101.25) == (False, 0.0, 0.5))
+
+    cu_offset = LipSync(offset_ms=100)
+    cu_offset.incarca_pcm(raw)
+    cu_offset.porneste(t=100.0)
+    verifica("decalajul configurat muta gura in timp",
+             cu_offset.citeste(101.05)[1] == 0.0 and cu_offset.citeste(101.2)[1] > 0.5)
+
+    fara_date = LipSync(offset_ms=0)
+    fara_date.pregateste(None)
+    fara_date.porneste(t=100.0)
+    niveluri = [fara_date.citeste(100.7 + k * 0.05)[1] for k in range(20)]
+    verifica("fara date audio gura tot se misca (rezerva)", fara_date.fara_date and max(niveluri) > 0.3)
+
+    fragment = raw[32000 + 640:32000 + 1280]
+    cu_audioop = analizeaza_fereastra(fragment)
+    original = modul_lipsync.audioop
+    modul_lipsync.audioop = None
+    try:
+        fara_audioop = analizeaza_fereastra(fragment)
+    finally:
+        modul_lipsync.audioop = original
+    verifica("varianta fara audioop da acelasi rezultat",
+             abs(cu_audioop[0] - fara_audioop[0]) < 0.02 * cu_audioop[0] + 1
+             and abs(cu_audioop[1] - fara_audioop[1]) < 0.03, f"{cu_audioop} vs {fara_audioop}")
+
+    erori = []
+
+    def citeste_mereu():
+        try:
+            for k in range(3000):
+                ls.citeste(100.0 + k / 1000.0)
+        except Exception as e:
+            erori.append(e)
+
+    fir = threading.Thread(target=citeste_mereu)
+    fir.start()
+    for _ in range(200):
+        ls.incarca_pcm(raw[:6400])
+        ls.porneste(t=100.0)
+        ls.opreste()
+    fir.join()
+    verifica("citirea in timp ce vocea porneste si se opreste nu da erori", not erori, str(erori[:1]))
+
+
 def test_afisaj():
     print("Afisaj Tk")
     try:
@@ -253,13 +341,23 @@ def test_afisaj():
             afisaj.aplica(expr)
         root.update_idletasks()
         verifica("cache-ul respecta limita", len(afisaj._cache) <= 6)
+        afisaj2 = AfisajFataTk(root, 480, 320)
+        afisaj2.aplica(EXPRESII["neutru"])
+        cutie_gura = afisaj2.geo.cutie_gura()
+        sus, jos = afisaj2._randuri["gura"]
+        verifica("gura inchisa ocupa mult mai putine randuri decat cutia ei",
+                 0 < jos - sus <= 0.5 * (cutie_gura[3] - cutie_gura[1]), f"{jos - sus} randuri")
+        deschisa = dict(EXPRESII["neutru"], g_desch=1.0)
+        modificat = [m for m in afisaj2.aplica(deschisa)]
+        verifica("schimbarea gurii atinge doar randurile gurii",
+                 len(modificat) == 1 and modificat[0][0] >= cutie_gura[1] and modificat[0][1] <= cutie_gura[3])
         verifica("imaginile afisate raman in viata", all(f == "" or f.width() > 0 for f in afisaj._afisat.values()))
     finally:
         root.destroy()
 
 
 def main():
-    for test in (test_expresii, test_randare, test_motor, test_somn, test_privire, test_afisaj):
+    for test in (test_expresii, test_randare, test_motor, test_somn, test_privire, test_lipsync, test_afisaj):
         try:
             test()
         except Exception as e:

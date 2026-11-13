@@ -198,9 +198,11 @@ def cheie_gura(geo, st):
     rot = _lim(st["g_rot"], 0.0, 1.0)
     viz = _lim(st["g_viz"], 0.0, 1.0)
     gros = 0 if viz < 0.05 else max(2, int(round(geo.g_gros * (0.5 + 0.5 * viz))))
-    return (int(round(geo.g_a * _lim(st["g_lat"], 0.1, 1.0) * (1.0 - 0.5 * rot))),
+    # Latimea si deschiderea merg in pasi de 2 pixeli: la vorbire aceleasi imagini revin des si vin din cache
+    pas = max(1, int(round(2 * geo.s)))
+    return (int(round(geo.g_a * _lim(st["g_lat"], 0.1, 1.0) * (1.0 - 0.5 * rot) / pas)) * pas,
             int(round(geo.g_curb * _lim(st["g_curb"], -1.0, 1.0))),
-            int(round(geo.g_desch * _lim(st["g_desch"], 0.0, 1.0))),
+            int(round(geo.g_desch * _lim(st["g_desch"], 0.0, 1.0) / pas)) * pas,
             int(round(rot * 4)),
             int(round(4 * geo.s * _lim(st["g_unda"], 0.0, 1.0))),
             int(round(7 * geo.s * _lim(st["g_stramb"], -1.0, 1.0))),

@@ -216,6 +216,24 @@ def ruleaza_test_fata():
         ui.afiseaza_mesaj("Tu", "salut robot")
         verifica("ce spui apare ca subtitrare", "salut robot" in fata.canvas.itemcget(fata._txt_sub, "text"))
 
+        # Gura după voce: un ton de 0,6 s încărcat direct, apoi notificările pe care le trimite voice.speak
+        from array import array
+        import math
+        ton = array("h", (int(9000 * math.sin(2 * math.pi * 220 * i / 16000.0)) for i in range(9600))).tobytes()
+        fata.lipsync.offset_s = 0.0
+        fata.lipsync.incarca_pcm(ton)
+        ui._la_redare_voce("pornit", t=time.monotonic())
+        deschidere = 0.0
+        final = time.monotonic() + 0.45
+        while time.monotonic() < final:
+            root.update()
+            deschidere = max(deschidere, fata.motor._gura_afisata)
+            time.sleep(0.01)
+        verifica("când pornește vocea, gura se deschide după sunet", fata.motor._vorbire and deschidere > 0.5)
+        ui._la_redare_voce("oprit")
+        _pompeaza(root, 0.1)
+        verifica("când se oprește vocea, gura se închide", not fata.motor._vorbire and fata.motor._gura_afisata == 0.0)
+
         def _strica(*a, **kw):
             raise RuntimeError("eroare simulată de test")
 

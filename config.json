@@ -18,6 +18,7 @@
     "tts_voice_en": "en-US-ChristopherNeural",
     "tts_rate": "+8%",
     "tts_pitch": "+0Hz",
+    "tts_playback_pitch": 0.0,
     "volum_normal": 95,
     "volum_ducking": 30,
     "duck_during_tts": false,

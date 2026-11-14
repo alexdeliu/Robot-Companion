@@ -22,6 +22,7 @@ _DEFAULT_CFG = {
         "tts_voice_en": "en-US-ChristopherNeural",
         "tts_rate": "+8%",
         "tts_pitch": "+0Hz",
+        "tts_playback_pitch": 0.0,
         "volum_normal": 95,
         "volum_ducking": 30
     },
@@ -177,6 +178,7 @@ VOCE_RO = os.getenv("TTS_VOICE_RO", CFG["audio_out"]["tts_voice_ro"])
 VOCE_EN = os.getenv("TTS_VOICE_EN", CFG["audio_out"]["tts_voice_en"])
 VITEZA_VOCE = os.getenv("TTS_RATE", CFG["audio_out"]["tts_rate"])
 TON_VOCE = os.getenv("TTS_PITCH", CFG["audio_out"].get("tts_pitch", "+0Hz"))
+TON_REDARE = float(os.getenv("TTS_PLAYBACK_PITCH", CFG["audio_out"].get("tts_playback_pitch", 0.0)) or 0.0)
 
 SAMPLE_RATE_MIC = int(CFG["microphone"]["sample_rate"])
 PAUSE_THRESHOLD = float(CFG["microphone"]["pause_threshold"])

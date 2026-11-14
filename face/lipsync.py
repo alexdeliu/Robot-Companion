@@ -36,7 +36,8 @@ OCTETI_FEREASTRA = int(RATA * FEREASTRA_S) * 2
 REF_MINIM = 400.0
 # Cat trece, estimativ, de la notificarea "redare pornita" pana cand sunetul se aude, minus intarzierea
 # ecranului. Se regleaza din face.lipsync_offset_ms dupa testul pe robot.
-OFFSET_IMPLICIT_MS = 40 if os.name == "nt" else 120
+# Pe Raspberry Pi 3 B+ cu mpg123 prin PipeWire, calibrarea cu microfonul a masurat 931-975 ms (2026-11-13).
+OFFSET_IMPLICIT_MS = 40 if os.name == "nt" else 880
 
 
 def analizeaza_fereastra(fragment):
@@ -134,6 +135,7 @@ class LipSync:
         self._ref = REF_MINIM
         self._gata = False
         self._t0 = None
+        self._viteza = 1.0
         self._activ = False
         self._cale = None
         self._decodare_pornita = False
@@ -156,9 +158,10 @@ class LipSync:
         if self._mpg123 and cale:
             threading.Thread(target=self._decodeaza_mpg123, args=(cale, gen), name="FaceLipSync", daemon=True).start()
 
-    def porneste(self, t=None):
-        """Redarea a pornit la momentul t (time.monotonic)."""
+    def porneste(self, t=None, viteza=1.0):
+        """Redarea a pornit la momentul t (time.monotonic); viteza > 1 daca sunetul e redat mai repede."""
         with self._lock:
+            self._viteza = max(0.25, float(viteza or 1.0))
             self._t0 = time.monotonic() if t is None else float(t)
             self._activ = True
             porneste_decodare = bool(self._cale) and not self._decodare_pornita
@@ -191,7 +194,7 @@ class LipSync:
         with self._lock:
             if not self._activ or self._t0 is None:
                 return False, 0.0, 0.5
-            t = (time.monotonic() if acum is None else acum) - self._t0 - self.offset_s
+            t = ((time.monotonic() if acum is None else acum) - self._t0 - self.offset_s) * self._viteza
             rms, stral, ref = self._rms, self._stral, self._ref
             n = len(rms)
             gata = self._gata

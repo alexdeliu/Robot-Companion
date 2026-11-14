@@ -171,7 +171,7 @@ def ruleaza_interactiv(latime, inaltime, zoom, auto_inchide=0.0, fraza=FRAZA_TES
             if eveniment == "pregatit":
                 lipsync.pregateste(date.get("cale"))
             elif eveniment == "pornit":
-                lipsync.porneste(date.get("t"))
+                lipsync.porneste(date.get("t"), date.get("viteza", 1.0))
             elif eveniment == "oprit":
                 lipsync.opreste()
 

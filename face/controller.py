@@ -134,7 +134,7 @@ class ControllerFata:
         if eveniment == "pregatit":
             self.lipsync.pregateste(date.get("cale"))
         elif eveniment == "pornit":
-            self.lipsync.porneste(date.get("t"))
+            self.lipsync.porneste(date.get("t"), date.get("viteza", 1.0))
         elif eveniment == "oprit":
             self.lipsync.opreste()
 

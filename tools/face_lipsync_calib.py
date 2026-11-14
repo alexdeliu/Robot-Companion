@@ -44,13 +44,14 @@ def _pe_grila(momente, valori, durata_s):
 
 def masoara_o_data(speak, LipSync, analizeaza_fereastra, estimeaza_decalaj, sursa):
     ls = LipSync(offset_ms=0)
-    t_pornit = []
+    t_pornit, viteza = [], [1.0]
 
     def la_redare(eveniment, **date):
         if eveniment == "pregatit":
             ls.pregateste(date.get("cale"))
         elif eveniment == "pornit":
             t_pornit.append(date.get("t") or time.monotonic())
+            viteza[0] = float(date.get("viteza", 1.0) or 1.0)
             ls.porneste(date.get("t"))   # pe PC decodarea porneste abia aici
 
     speak.seteaza_callback_redare(la_redare)
@@ -81,7 +82,9 @@ def masoara_o_data(speak, LipSync, analizeaza_fereastra, estimeaza_decalaj, surs
     if not t_pornit or ls.durata_s <= 0 or not momente:
         return None, 0.0, f"lipsesc date (pornit={len(t_pornit)}, durata={ls.durata_s:.2f}s, microfon={len(momente)} bucăți)"
     t0 = t_pornit[0]
-    referinta = [v for v in ls._rms for _ in (0, 1)]   # ferestre de 20 ms -> grilă de 10 ms
+    # Ferestre de 20 ms din fișier -> grilă de 10 ms în timp real (redarea poate fi mai rapidă decât fișierul)
+    referinta = [ls._rms[min(len(ls._rms) - 1, int(k * PAS_S * viteza[0] / 0.02))]
+                 for k in range(int(ls.durata_s / viteza[0] / PAS_S))]
     relativ = [(t - t0, v) for t, v in zip(momente, tarii) if t >= t0]
     masurat = _pe_grila([t for t, _v in relativ], [v for _t, v in relativ], ls.durata_s + 1.3)
     decalaj, scor = estimeaza_decalaj(referinta, masurat, pas_s=PAS_S, max_s=1.2)

@@ -281,6 +281,12 @@ def test_lipsync():
     verifica("decalajul configurat muta gura in timp",
              cu_offset.citeste(101.05)[1] == 0.0 and cu_offset.citeste(101.2)[1] > 0.5)
 
+    rapid = LipSync(offset_ms=0)
+    rapid.incarca_pcm(raw)
+    rapid.porneste(t=100.0, viteza=1.25)
+    verifica("la redare mai rapida gura tine pasul cu sunetul",
+             rapid.citeste(100.78)[1] == 0.0 and rapid.citeste(100.86)[1] > 0.5 and rapid.citeste(101.7)[1] == 0.0)
+
     fara_date = LipSync(offset_ms=0)
     fara_date.pregateste(None)
     fara_date.porneste(t=100.0)

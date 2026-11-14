@@ -58,6 +58,15 @@ def test_text_rostit():
     finally:
         speak.VOCE_RO = original_ro
     verifica("tonul vocii are forma cerută de edge-tts", speak.TON_VOCE[0] in "+-" and speak.TON_VOCE.endswith("Hz"), speak.TON_VOCE)
+    original_ton = speak.TON_REDARE
+    try:
+        speak.TON_REDARE = 0.0
+        verifica("fără ton la redare, comanda mpg123 e cea dinainte", speak._comanda_mpg123("a.mp3") == ["mpg123", "-q", "a.mp3"])
+        speak.TON_REDARE = 0.2
+        verifica("cu ton la redare, mpg123 primește --pitch",
+                 speak._comanda_mpg123("a.mp3") == ["mpg123", "-q", "--pitch", "0.200", "a.mp3"])
+    finally:
+        speak.TON_REDARE = original_ton
 
 
 def main():

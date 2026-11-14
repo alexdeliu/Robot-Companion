@@ -10,7 +10,7 @@ import subprocess
 import unicodedata
 import edge_tts
 
-from config import VOCE_RO, VOCE_EN, VITEZA_VOCE, TON_VOCE, DEBUG
+from config import VOCE_RO, VOCE_EN, VITEZA_VOCE, TON_VOCE, TON_REDARE, DEBUG
 from system_health import logger
 
 _MIXER_INITIALIZAT = False
@@ -176,6 +176,13 @@ def opreste_voce():
     _ULTIMA_VORBIRE_FINAL = time.monotonic()
 
 
+def _comanda_mpg123(cale_fisier):
+    """Comanda de redare. Cu tts_playback_pitch > 0 vocea e redata mai sus si mai repede (voce de robot mic)."""
+    if TON_REDARE:
+        return ["mpg123", "-q", "--pitch", f"{TON_REDARE:.3f}", cale_fisier]
+    return ["mpg123", "-q", cale_fisier]
+
+
 def _reda_fisier_audio(cale_fisier):
     global _MIXER_INITIALIZAT, _PROCES_CURENT_MPG123
     if _ANULARE_VORBIRE.is_set():
@@ -183,11 +190,11 @@ def _reda_fisier_audio(cale_fisier):
 
     if os.name != "nt" and shutil.which("mpg123"):
         _PROCES_CURENT_MPG123 = subprocess.Popen(
-            ["mpg123", "-q", cale_fisier],
+            _comanda_mpg123(cale_fisier),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL
         )
-        _notifica_redare("pornit", t=time.monotonic())
+        _notifica_redare("pornit", t=time.monotonic(), viteza=1.0 + TON_REDARE)
         _PROCES_CURENT_MPG123.wait()
         _PROCES_CURENT_MPG123 = None
         return
